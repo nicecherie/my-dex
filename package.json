@@ -7,10 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "lint:fix": "eslint --fix"
+    "lint:fix": "eslint --fix",
+    "scanner": "tsx app/scripts/blockchain-scanner.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
+    "mysql2": "^3.15.3",
     "next": "16.0.1",
     "react": "19.2.0",
     "react-dom": "19.2.0"

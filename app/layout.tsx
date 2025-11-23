@@ -2,8 +2,10 @@ import type { Metadata } from 'next'
 import { Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import '@rainbow-me/rainbowkit/styles.css'
-import { ThemeProvider } from '@/app/components/providers/ThemeProvider'
-import Header from '@/app/components/layout/Header'
+import { ThemeProvider } from '@/components/providers/ThemeProvider'
+import Header from '@/components/layout/Header'
+import { Web3Provider } from '@/components/providers/Web3Provider'
+
 const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
 const jetBrainsMono = JetBrains_Mono({
   variable: '--font-jetBrainsMono',
@@ -28,8 +30,10 @@ export default function RootLayout({
       `}
       >
         <ThemeProvider defaultTheme="system" storageKey="dex-ui-theme">
-          <Header />
-          {children}
+          <Web3Provider>
+            <Header />
+            {children}
+          </Web3Provider>
         </ThemeProvider>
       </body>
     </html>

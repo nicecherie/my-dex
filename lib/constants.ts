@@ -46,7 +46,7 @@ export const TOKENS = {
 export const NETWORK_CONFIG = {
   chainId: 11155111, // Sepolia
   name: 'Sepolia',
-  rpcUrl: process.env.SEPOLIA_RPC_URL || 'https://rpc.sepolia.org',
+  rpcUrl: process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL || 'https://rpc.sepolia.org',
   blockExplorer: 'https://sepolia.etherscan.io'
 } as const
 

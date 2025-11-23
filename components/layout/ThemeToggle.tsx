@@ -1,6 +1,6 @@
 'use client'
 
-import { cn } from '@/app/lib/utils'
+import { cn } from '@/lib/utils'
 import { Moon, Sun } from 'lucide-react'
 import { useTheme } from '../providers/ThemeProvider'
 
@@ -15,7 +15,7 @@ export function ThemeToggle() {
           'p-2 rounded-md transition-colors',
           theme === 'light'
             ? 'bg-white shadow-sm'
-            : 'hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-white'
+            : 'hover:bg-gray-200 dark:hover:bg-gray-800'
         )}
       >
         <Sun className="h-4 w-4" />
@@ -24,7 +24,7 @@ export function ThemeToggle() {
         onClick={() => setTheme('dark')}
         aria-label="切换到暗黑模式"
         className={cn(
-          'p-2 rounded-md transition-colors dark:text-white',
+          'p-2 rounded-md transition-colors',
           theme === 'dark'
             ? 'bg-white dark:bg-gray-700 shadow-sm'
             : 'hover:bg-gray-200 dark:hover:bg-gray-800'

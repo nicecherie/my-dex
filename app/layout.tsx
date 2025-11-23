@@ -31,7 +31,7 @@ export default function RootLayout({
         <ThemeProvider defaultTheme="system" storageKey="dex-ui-theme">
           <Web3Provider>
             <Header />
-            {children}
+            <main className="container mx-auto px-4 py-8">{children}</main>
           </Web3Provider>
         </ThemeProvider>
       </body>

@@ -1,8 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { ConnectWalletButton } from './ConnectWalletButton'
+import { ConnectButtonCustom } from './ConnectButtonCustom'
 import { ThemeToggle } from './ThemeToggle'
+
+const navigation = [
+  { name: '交换', href: '/' },
+  { name: '流动性池', href: '/pools' },
+  { name: '头寸', href: '/positions' }
+]
 
 export default function Header() {
   return (
@@ -23,8 +29,22 @@ export default function Header() {
               </span>
             </Link>
           </div>
-          <ThemeToggle />
-          <ConnectWalletButton />
+          <div className="flex items-center gap-4">
+            <div className="flex">
+              {navigation.map((item) => (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  className="text-muted-foreground hover:text-foreground px-3 py-2 rounded-md text-sm font-medium"
+                >
+                  {item.name}
+                </Link>
+              ))}
+            </div>
+
+            <ThemeToggle />
+            <ConnectButtonCustom />
+          </div>
         </div>
       </nav>
     </header>

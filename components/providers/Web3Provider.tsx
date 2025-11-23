@@ -7,6 +7,7 @@ import {
 } from '@rainbow-me/rainbowkit'
 import { WagmiProvider } from 'wagmi'
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
+import '@rainbow-me/rainbowkit/styles.css'
 
 import { config } from '@/lib/wagmi'
 import { useTheme } from './ThemeProvider'

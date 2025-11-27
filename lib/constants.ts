@@ -17,7 +17,7 @@ export const TOKENS = {
     isNative: true
   },
   MNTokenA: {
-    address: '0xeAdC775e223c4aD904d6C891d9dDa21C34709280',
+    address: '0xeAdC775e223c4aD904d6C891d9dDa21C34709280', // 我的MetaNode
     symbol: 'MNA',
     name: 'MetaNode Token A',
     decimals: 18

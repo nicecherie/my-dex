@@ -19,7 +19,7 @@ export function formatTokenAmount(amount: string | number): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount
   if (num === 0) return '0'
   if (num < 0.001) return '<0.001'
-  if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M'
+  if (num >= 1000000) return Math.floor(num / 10000) / 100 + 'M' // 保留两位小数, 不四舍五入
   if (num >= 1000) return (num / 1000).toFixed(2) + 'K'
   return num.toFixed(6).replace(/\.?0+$/, '')
 }

@@ -7,7 +7,8 @@ import { ThemeToggle } from './ThemeToggle'
 const navigation = [
   { name: '交换', href: '/' },
   { name: '流动性池', href: '/pools' },
-  { name: '头寸', href: '/positions' }
+  { name: '头寸', href: '/positions' },
+  { name: '发射', href: '/release' }
 ]
 
 export default function Header() {

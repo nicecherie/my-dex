@@ -1,15 +1,15 @@
 import type { Metadata } from 'next'
-import { Inter, JetBrains_Mono } from 'next/font/google'
+// import { Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import { ThemeProvider } from '@/components/providers/ThemeProvider'
 import Header from '@/components/layout/Header'
 import { Web3Provider } from '@/components/providers/Web3Provider'
 
-const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
-const jetBrainsMono = JetBrains_Mono({
-  variable: '--font-jetBrainsMono',
-  subsets: ['latin']
-})
+// const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
+// const jetBrainsMono = JetBrains_Mono({
+//   variable: '--font-jetBrainsMono',
+//   subsets: ['latin']
+// })
 
 export const metadata: Metadata = {
   title: 'MySwap',
@@ -24,7 +24,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body
-        className={`${inter.variable} ${jetBrainsMono.variable}
+        className={`
         antialiased bg-background text-foreground min-h-screen font-sans
       `}
       >

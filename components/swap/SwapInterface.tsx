@@ -1,5 +1,7 @@
 'use client'
 
+import { usePools } from '@/hooks/usePools'
+import { useSwap } from '@/hooks/useSwap'
 import { TOKENS } from '@/lib/constants'
 import {
   cn,
@@ -7,7 +9,7 @@ import {
   parseInputAmount,
   shortenAddress
 } from '@/lib/utils'
-import { ChevronDown, Clock, Settings } from 'lucide-react'
+import { CheckCircle, ChevronDown, Clock, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useAccount, useBalance } from 'wagmi'
 
@@ -31,8 +33,20 @@ export default function SwapInterface() {
   const [isQuoting, setIsQuoting] = useState(false)
   const [isSimulated, setIsSimulated] = useState(false)
   const [needsApproval, setNeedsApproval] = useState(false)
-  const [isConfirming, setIsConfirming] = useState(false)
-  const [isPending, setIsPending] = useState(false)
+
+  const {
+    getQuote,
+    useTokenAllowance,
+    approveToken,
+    excuteSwap,
+    lastSwapParams,
+    isConfirming,
+    isPending,
+    isConfirmed,
+    hash
+  } = useSwap()
+
+  const { pools } = usePools()
 
   // 获取代币列表
   const tokenList: Token[] = Object.values(TOKENS)
@@ -51,6 +65,15 @@ export default function SwapInterface() {
       enabled: Boolean(isConnected && address)
     }
   })
+  // 处理输入金额
+  const handleFromAmountChange = (value: string) => {
+    const parsed = parseInputAmount(value)
+    setFromAmount(parsed)
+  }
+  const handleApprove = () => {}
+  // 处理交易
+  const handleSwap = () => {}
+
   // 处理代币选择
   const TokenSelector = ({
     selectedToken,
@@ -117,19 +140,37 @@ export default function SwapInterface() {
       </div>
     )
   }
-  // 处理输入金额
-  const handleFromAmountChange = (value: string) => {
-    const parsed = parseInputAmount(value)
-    setFromAmount(parsed)
-  }
-  const handleApprove = () => {}
-  const handleSwap = () => {}
-  // 处理交易
 
   const TranscationStatus = () => {
+    if (!hash) return null
+
     return (
-      <div className="mb-6 p-4">
-        <div className="flex">{}</div>
+      <div className="mb-6 p-4 bg-primary/10 rounded-lg border border-primary/20">
+        <div className="flex items-center space-x-2">
+          {isPending && (
+            <>
+              <Clock className="w-4 h-4 text-primary animate-spin" />
+              <span className="text-primary">等待钱包确认...</span>
+            </>
+          )}
+          {isConfirming && (
+            <>
+              <Clock className="w-4 h-4 text-primary animate-spin" />
+              <span className="text-primary">交易确认中...</span>
+            </>
+          )}
+          {isConfirmed && (
+            <>
+              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+              <span className="text-green-700 dark:text-green-300">
+                交易成功！
+              </span>
+            </>
+          )}
+        </div>
+        <div className="mt-2 text-sm text-primary">
+          交易哈希:{shortenAddress(hash)}
+        </div>
       </div>
     )
   }
@@ -149,7 +190,7 @@ export default function SwapInterface() {
         </div>
 
         {/* 交易状态 */}
-
+        <TranscationStatus />
         {/* 钱包状态 */}
         {isConnected && address && (
           <div className="mb-4 p-3 bg-primary/10 rounded-lg">

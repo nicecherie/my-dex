@@ -1,9 +1,10 @@
 'use client'
-import { TOKENS } from '@/lib/constants'
-import { contractConfig } from '@/lib/contracts'
-import { useEffect, useState } from 'react'
+
+import { useState, useEffect } from 'react'
+import { useReadContracts } from 'wagmi'
 import { formatUnits } from 'viem'
-import { useReadContract, useReadContracts } from 'wagmi'
+import { contractConfig } from '@/lib/contracts'
+import { TOKENS } from '@/lib/constants'
 
 export interface PoolData {
   poolAddress: string
@@ -21,16 +22,16 @@ export const usePoolData = (
   token0: string,
   token1: string
 ) => {
-  const [PoolData, setPoolData] = useState<PoolData | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<Error | null>(null)
+  const [poolData, setPoolData] = useState<PoolData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   // 获取代币信息
   const getTokenInfo = (address: string) => {
     const token = Object.values(TOKENS).find(
       (t) => t.address.toLowerCase() === address.toLowerCase()
     )
-    return token || { symbol: 'UNKOWN', name: 'Unkown Token', decimals: 18 }
+    return token || { symbol: 'UNKNOWN', name: 'Unknown Token', decimals: 18 }
   }
 
   const token0Info = getTokenInfo(token0)
@@ -40,20 +41,21 @@ export const usePoolData = (
   const contracts =
     poolAddress && token0 && token1
       ? [
-          // 获取token0 在池子中的余额
+          // 获取 token0 在池子中的余额
           {
             address: token0 as `0x${string}`,
             abi: contractConfig.erc20.abi,
             functionName: 'balanceOf',
             args: [poolAddress as `0x${string}`]
           },
+          // 获取 token1 在池子中的余额
           {
             address: token1 as `0x${string}`,
             abi: contractConfig.erc20.abi,
             functionName: 'balanceOf',
             args: [poolAddress as `0x${string}`]
           },
-          //  获取池子的费用增长信息
+          // 获取池子的费用增长信息
           {
             address: poolAddress as `0x${string}`,
             abi: contractConfig.pool.abi,
@@ -88,7 +90,7 @@ export const usePoolData = (
           feeGrowth1Result
         ] = contractData
 
-        // 检查是否调用成功
+        // 检查所有调用是否成功
         if (
           token0BalanceResult.status === 'success' &&
           token1BalanceResult.status === 'success' &&
@@ -106,10 +108,12 @@ export const usePoolData = (
           )
 
           // 获取费用增长数据
-          const feeGrowthGlobal0X128 = (feeGrowth0Result.result as bigint)
-            .toString
-          const feeGrowthGlobal1X128 = (feeGrowth1Result.result as bigint)
-            .toString
+          const feeGrowthGlobal0X128 = (
+            feeGrowth0Result.result as bigint
+          ).toString()
+          const feeGrowthGlobal1X128 = (
+            feeGrowth1Result.result as bigint
+          ).toString()
 
           // 计算 TVL（简化版本，假设 token 价格为 $1）
           // 实际项目中需要从价格预言机或 API 获取真实价格
@@ -135,16 +139,29 @@ export const usePoolData = (
             poolAddress,
             token0Balance,
             token1Balance,
-            feeGrowthGlobal0X128: feeGrowthGlobal0X128.toString(),
-            feeGrowthGlobal1X128: feeGrowthGlobal1X128.toString(),
+            feeGrowthGlobal0X128,
+            feeGrowthGlobal1X128,
             tvlUSD,
             volumeUSD,
             feesUSD
           })
           setError(null)
+        } else {
+          throw new Error('部分合约调用失败')
         }
-      } catch (error) {}
+      } catch (err) {
+        console.error('处理池子数据时出错:', err)
+        setError('处理池子数据失败')
+      }
+    } else if (contractError) {
+      console.error('获取池子数据出错:', contractError)
+      setError('获取池子数据失败')
     }
+
+    // 修复无限循环 - 只在loading状态真正变化时更新
+    setLoading((prevLoading) =>
+      prevLoading !== isLoading ? isLoading : prevLoading
+    )
   }, [
     contractData,
     isLoading,
@@ -155,13 +172,13 @@ export const usePoolData = (
   ])
 
   return {
-    PoolData,
+    poolData,
     loading,
     error
   }
 }
 
-// 多个池子的批量数据获取
+// 用于多个池子的批量数据获取
 export const useMultiplePoolsData = (
   pools: Array<{ pool: string; token0: string; token1: string }>
 ) => {
@@ -173,6 +190,7 @@ export const useMultiplePoolsData = (
   const poolsKey = JSON.stringify(
     pools.map((p) => `${p.pool}-${p.token0}-${p.token1}`).sort()
   )
+  console.log('pools:', pools)
 
   // 为所有池子构建合约调用
   const contracts = pools.flatMap(({ pool, token0, token1 }) => [
@@ -214,6 +232,7 @@ export const useMultiplePoolsData = (
       enabled: pools.length > 0
     }
   })
+  console.log(contractData, 'contractData')
 
   useEffect(() => {
     if (
@@ -290,6 +309,7 @@ export const useMultiplePoolsData = (
             }
           }
         })
+        console.log('newPoolsData:', newPoolsData)
 
         setPoolsData(newPoolsData)
         setError(null)

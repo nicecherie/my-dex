@@ -7,7 +7,9 @@ import { POOL_MANAGER_ABI } from '@/lib/contracts'
 // 创建公共客户端连接
 const client = createPublicClient({
   chain: sepolia,
-  transport: http('https://sepolia.infura.io/v3/d8ed0bd1de8242d998a1405b6932ab33'),
+  transport: http(
+    'https://sepolia.infura.io/v3/05bc028ee75343e8a7bec005356539a4'
+  )
 })
 
 export async function POST(request: Request) {
@@ -31,48 +33,50 @@ export async function POST(request: Request) {
     const poolsData = await client.readContract({
       address: CONTRACTS.POOL_MANAGER as `0x${string}`,
       abi: POOL_MANAGER_ABI,
-      functionName: 'getAllPools',
+      functionName: 'getAllPools'
     })
-    
+
     type PoolInfo = {
-      pool: string;
-      token0: string;
-      token1: string;
-      index: number;
+      pool: string
+      token0: string
+      token1: string
+      index: number
     }
-    
-    const pools = (poolsData as unknown) as PoolInfo[]
-    
+
+    const pools = poolsData as unknown as PoolInfo[]
+
     // 查找匹配的池子
-    const matchingPool = pools.find(p => {
-      return p.token0.toLowerCase() === sortedToken0.toLowerCase() && 
-             p.token1.toLowerCase() === sortedToken1.toLowerCase()
+    const matchingPool = pools.find((p) => {
+      return (
+        p.token0.toLowerCase() === sortedToken0.toLowerCase() &&
+        p.token1.toLowerCase() === sortedToken1.toLowerCase()
+      )
     })
-    
+
     if (matchingPool) {
       return NextResponse.json({
         success: true,
         exists: true,
         poolAddress: matchingPool.pool,
-        poolIndex: matchingPool.index,
+        poolIndex: matchingPool.index
       })
     } else {
       return NextResponse.json({
         success: true,
-        exists: false,
+        exists: false
       })
     }
   } catch (error: unknown) {
     console.error('检查池子API错误:', error)
-    
+
     const errorMessage = error instanceof Error ? error.message : '检查池子失败'
-    
+
     return NextResponse.json(
-      { 
-        success: false, 
+      {
+        success: false,
         error: errorMessage
       },
       { status: 500 }
     )
   }
-} 
+}

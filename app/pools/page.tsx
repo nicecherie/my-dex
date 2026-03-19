@@ -13,6 +13,7 @@ import {
   Zap,
   TrendingUp
 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { useAccount } from 'wagmi'
 
@@ -21,7 +22,7 @@ export default function PoolsPage() {
 
   const { isConnected } = useAccount()
   const { pools, loading, error, totalStats, refetch } = usePools()
-
+  const router = useRouter()
   // 格式化最大数字
   const formatLargeNumber = (val: number) => {
     if (val >= 1000000) {
@@ -31,6 +32,10 @@ export default function PoolsPage() {
     } else {
       return '$' + val.toFixed(2)
     }
+  }
+
+  const handleCreatePool = () => {
+    router.push('/liquidity')
   }
   return (
     <div>
@@ -122,7 +127,7 @@ export default function PoolsPage() {
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-semibold">所有流动性池</h2>
               <button
-                onClick={() => setShowCreateModal(true)}
+                onClick={handleCreatePool}
                 className="bg-primary flex items-center gap-2 text-white px-4 py-2 rounded-md hover:bg-primary/80 transition-colors"
               >
                 <Plus className="w-4 h-4" />
@@ -259,11 +264,6 @@ export default function PoolsPage() {
             </div>
           )}
         </div>
-
-        <CreatePoolModal
-          open={showCreateModal}
-          onClose={() => setShowCreateModal(false)}
-        />
       </NetworkChecker>
     </div>
   )

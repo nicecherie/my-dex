@@ -1,15 +1,15 @@
 import type { Metadata } from 'next'
-// import { Inter, JetBrains_Mono } from 'next/font/google'
+import { Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import { ThemeProvider } from '@/components/providers/ThemeProvider'
 import Header from '@/components/layout/Header'
 import { Web3Provider } from '@/components/providers/Web3Provider'
 
-// const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
-// const jetBrainsMono = JetBrains_Mono({
-//   variable: '--font-jetBrainsMono',
-//   subsets: ['latin']
-// })
+const inter = Inter({ variable: '--font-inter', subsets: ['latin'] })
+const jetBrainsMono = JetBrains_Mono({
+  variable: '--font-jetBrainsMono',
+  subsets: ['latin']
+})
 
 export const metadata: Metadata = {
   title: 'MySwap',
@@ -24,14 +24,16 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body
-        className={`
-        antialiased bg-background text-foreground min-h-screen font-sans
+        className={` ${inter.variable} ${jetBrainsMono.variable}
+        antialiased text-foreground min-h-screen font-sans
       `}
       >
         <ThemeProvider defaultTheme="system" storageKey="dex-ui-theme">
           <Web3Provider>
-            <Header />
-            <main className="container mx-auto px-4 py-8">{children}</main>
+            <div className="flex flex-col min-h-screen bg-gradient-to-br from-blue-100 to-gray-100">
+              <Header />
+              <main className="container mx-auto px-4 py-8">{children}</main>
+            </div>
           </Web3Provider>
         </ThemeProvider>
       </body>

@@ -10,6 +10,7 @@ export const CONTRACTS = {
 export const TOKENS = {
   ETH: {
     address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // 原生ETH的特殊地址
+    // address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', // 原生ETH的特殊地址
     wrappedAddress: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', // Sepolia WETH 地址
     symbol: 'ETH',
     name: 'Ethereum',
@@ -41,6 +42,18 @@ export const TOKENS = {
     decimals: 18
   }
 } as const
+
+export const ETH_SPECIAL_ADDRESS = TOKENS.ETH.address
+
+export function isNativeTokenAddress(address?: string | null): boolean {
+  return (
+    !!address && address.toLowerCase() === ETH_SPECIAL_ADDRESS.toLowerCase()
+  )
+}
+
+export function toChainTokenAddress(address: string): string {
+  return isNativeTokenAddress(address) ? TOKENS.ETH.wrappedAddress : address
+}
 
 // 网络配置
 export const NETWORK_CONFIG = {

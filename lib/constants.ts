@@ -55,6 +55,22 @@ export function toChainTokenAddress(address: string): string {
   return isNativeTokenAddress(address) ? TOKENS.ETH.wrappedAddress : address
 }
 
+export function getTokenByAddress(address?: string | null) {
+  if (!address) return undefined
+
+  return Object.values(TOKENS).find((token) => {
+    if (token.address.toLowerCase() === address.toLowerCase()) {
+      return true
+    }
+
+    return (
+      'wrappedAddress' in token &&
+      typeof token.wrappedAddress === 'string' &&
+      token.wrappedAddress.toLowerCase() === address.toLowerCase()
+    )
+  })
+}
+
 // 网络配置
 export const NETWORK_CONFIG = {
   chainId: 11155111, // Sepolia

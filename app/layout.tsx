@@ -12,7 +12,7 @@ const jetBrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'MySwap',
+  title: 'CherieSwap',
   description: '基于区块链的去中心化代币交换平台'
 }
 

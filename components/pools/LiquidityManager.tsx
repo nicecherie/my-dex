@@ -1,8 +1,9 @@
 'use client'
 
 import { ArrowRight, ArrowUpDown, ChevronDown, Clock, Info } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
+  CONTRACTS,
   FEE_TIERS,
   isNativeTokenAddress,
   toChainTokenAddress,
@@ -101,6 +102,7 @@ export default function LiquidityManager() {
 
   const [needsApproval0, setNeedsApproval0] = useState<boolean>(false)
   const [needsApproval1, setNeedsApproval1] = useState<boolean>(false)
+  const [isCheckingAllowance, setIsCheckingAllowance] = useState<Boolean>(false)
   const [isCalculating, setIsCalculating] = useState(false)
   const [priceError, setPriceError] = useState<string | null>(null)
 
@@ -536,6 +538,85 @@ export default function LiquidityManager() {
       refetchNativeBalance()
     ])
   }, [refetchToken0Balance, refetchToken1Balance, refetchNativeBalance])
+
+  // 检查授权
+  const checkAllowance = useCallback(async () => {
+    if (!address || !token0 || !token1 || !amount0 || !amount1) {
+      setNeedsApproval0(false)
+      setNeedsApproval1(false)
+      return
+    }
+    try {
+      setIsCheckingAllowance(true)
+      setTransactionError(null)
+      const allowance0Response = await fetch('/api/allowance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          token: toChainTokenAddress(token0.address),
+          owner: address,
+          spender: CONTRACTS.POSITION_MANAGER
+        })
+      }).then((res) => res.json())
+
+      const allowance1Response = await fetch('/api/allowance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          token: toChainTokenAddress(token0.address),
+          owner: address,
+          spender: CONTRACTS.POSITION_MANAGER
+        })
+      }).then((res) => res.json())
+
+      if (allowance0Response.success && allowance1Response.success) {
+        const amountWei0 = parseUnits(amount0, token0.decimals)
+        const amountWei1 = parseUnits(amount1, token1.decimals)
+
+        setNeedsApproval0(BigInt(allowance0Response.allowance) < amountWei0)
+        setNeedsApproval1(BigInt(allowance1Response.allowance) < amountWei1)
+      }
+    } catch (error) {
+      console.error('检查授权失败：', error)
+    } finally {
+      setIsCheckingAllowance(false)
+    }
+  }, [address, token0, token1, amount0, amount1])
+
+  useEffect(() => {
+    checkAllowance()
+  }, [amount0, amount1, token0, token1, address, checkAllowance])
+
+  // 授权代币
+  const approveToken = useCallback(
+    async (tokenAddress: string, amount: string, decimals: number) => {
+      if (!address) return
+
+      try {
+        const amountWei = parseUnits(amount, decimals)
+        const actualTokenAddress = toChainTokenAddress(tokenAddress)
+        setTransactionAction(
+          tokenAddress === token0?.address ? 'approve0' : 'approve1'
+        )
+        setTransactionError(null)
+
+        await writeContractWithEstimatedGas({
+          address: actualTokenAddress as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [CONTRACTS.POSITION_MANAGER as `0x${string}`, amountWei]
+        })
+      } catch (error) {
+        setTransactionAction(null)
+        setTransactionError(getErrorMessage(error))
+      }
+    },
+    [address, token0?.address, writeContractWithEstimatedGas, getErrorMessage]
+  )
 
   const TokenSelector = ({
     selectedToken,

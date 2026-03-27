@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createPublicClient, http } from 'viem'
 import { sepolia } from 'viem/chains'
-import { CONTRACTS } from '@/lib/constants'
+import { CONTRACTS, toChainTokenAddress } from '@/lib/constants'
 import { POOL_MANAGER_ABI } from '@/lib/contracts'
 
 // 创建公共客户端连接
@@ -11,11 +11,11 @@ const client = createPublicClient({
     'https://sepolia.infura.io/v3/05bc028ee75343e8a7bec005356539a4'
   )
 })
-
 export async function POST(request: Request) {
   try {
     // 解析请求数据
     const body = await request.json()
+
     const { token0, token1, fee } = body
 
     if (!token0 || !token1 || !fee) {
@@ -25,9 +25,14 @@ export async function POST(request: Request) {
       )
     }
 
+    const actualToken0 = toChainTokenAddress(token0)
+    const actualToken1 = toChainTokenAddress(token1)
+
     // 确保token0地址小于token1地址（Uniswap V4的要求）
-    const sortedToken0 = BigInt(token0) < BigInt(token1) ? token0 : token1
-    const sortedToken1 = BigInt(token0) < BigInt(token1) ? token1 : token0
+    const sortedToken0 =
+      BigInt(actualToken0) < BigInt(actualToken1) ? actualToken0 : actualToken1
+    const sortedToken1 =
+      BigInt(actualToken0) < BigInt(actualToken1) ? actualToken1 : actualToken0
 
     // 获取所有池子
     const poolsData = await client.readContract({
@@ -41,6 +46,7 @@ export async function POST(request: Request) {
       token0: string
       token1: string
       index: number
+      fee: number
     }
 
     const pools = poolsData as unknown as PoolInfo[]
@@ -49,7 +55,8 @@ export async function POST(request: Request) {
     const matchingPool = pools.find((p) => {
       return (
         p.token0.toLowerCase() === sortedToken0.toLowerCase() &&
-        p.token1.toLowerCase() === sortedToken1.toLowerCase()
+        p.token1.toLowerCase() === sortedToken1.toLowerCase() &&
+        Number(p.fee) === Number(fee)
       )
     })
 

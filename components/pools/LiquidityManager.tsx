@@ -77,6 +77,7 @@ export default function LiquidityManager() {
   const [step, setStep] = useState<Step>('select')
   // const [step, setStep] = useState<Step>('searching')
 
+  // 获取token列表
   const tokenList = Object.values(TOKENS)
   // 选择的交易对参数
   const [selectedToken0Address, setSelectedToken0Address] = useState<string>('')
@@ -201,17 +202,25 @@ export default function LiquidityManager() {
     }
   })
 
-  console.log('nativeBalance', nativeBalance)
-  console.log('address', address)
-  console.log('token0', token0)
+  const fetchPoolStatus = useCallback(async () => {
+    const response = await fetch('/api/pools/check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        token0: selectedToken0Address,
+        token1: selectedToken1Address,
+        fee: selectedFee
+      })
+    }).then((res) => res.json())
 
-  const refreshBalances = useCallback(async () => {
-    await Promise.all([
-      refetchToken0Balance(),
-      refetchToken1Balance(),
-      refetchNativeBalance()
-    ])
-  }, [refetchToken0Balance, refetchToken1Balance, refetchNativeBalance])
+    if (!response.success) {
+      throw new Error(response.error || '搜索池子失败')
+    }
+
+    return response
+  }, [selectedToken0Address, selectedToken1Address, selectedFee])
 
   // 判断两种代币是否有余额
   const hasInsuffientBalance0 = (() => {
@@ -442,6 +451,26 @@ export default function LiquidityManager() {
     setStep('addLiquidity')
   }
 
+  const applyPoolStatus = useCallback(
+    (response: {
+      exists: boolean
+      poolAddress?: string
+      poolIndex?: number
+    }) => {
+      if (response.exists) {
+        setPoolExists(true)
+        setCurrentPool(response.poolAddress || null)
+        setPoolIndex(response.poolIndex ?? null)
+        return
+      }
+
+      setPoolExists(false)
+      setCurrentPool(null)
+      setPoolIndex(null)
+    },
+    []
+  )
+
   const searchPool = useCallback(async () => {
     if (!selectedToken0Address || !selectedToken1Address) {
       setSearchError('请选择两个代币')
@@ -459,37 +488,9 @@ export default function LiquidityManager() {
     setSearchError(null)
 
     try {
-      const response = await fetch('/api/pools/check', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          token0: selectedToken0Address,
-          token1: selectedToken1Address,
-          fee: selectedFee
-          // chainId: selectedChainId
-        })
-      }).then((res) => res.json())
-
-      if (response.success && response.exists) {
-        setPoolExists(true)
-        setCurrentPool(response.poolAddress)
-        setPoolIndex(response.poolIndex)
-        setStep('found')
-        // 这里可以存储池子地址和索引，供后续添加流动性使用
-        console.log(
-          '找到池子:',
-          response.poolAddress,
-          '索引:',
-          response.poolIndex
-        )
-      } else {
-        setPoolExists(false)
-        setCurrentPool(null)
-        setPoolIndex(null)
-        setStep('notFound')
-      }
+      const response = await fetchPoolStatus()
+      applyPoolStatus(response)
+      setStep(response.exists ? 'found' : 'notFound')
     } catch (error) {
       console.error('搜索池子失败:', error)
       setSearchError(
@@ -505,9 +506,36 @@ export default function LiquidityManager() {
   }, [
     selectedToken0Address,
     selectedToken1Address,
-    selectedFee,
-    selectedChainId
+    applyPoolStatus,
+    fetchPoolStatus
   ])
+
+  const refreshPoolStatus = useCallback(async () => {
+    if (!selectedToken0Address || !selectedToken1Address) {
+      setIsCheckingPool(true)
+      try {
+        const response = await fetchPoolStatus()
+        applyPoolStatus(response)
+      } catch (error) {
+        console.log('刷新池子状态失败：', error)
+      } finally {
+        setIsCheckingPool(false)
+      }
+    }
+  }, [
+    selectedToken0Address,
+    selectedToken1Address,
+    fetchPoolStatus,
+    applyPoolStatus
+  ])
+
+  const refreshBalances = useCallback(async () => {
+    await Promise.all([
+      refetchToken0Balance(),
+      refetchToken1Balance(),
+      refetchNativeBalance()
+    ])
+  }, [refetchToken0Balance, refetchToken1Balance, refetchNativeBalance])
 
   const TokenSelector = ({
     selectedToken,

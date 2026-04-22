@@ -1,13 +1,31 @@
 'use client'
 
-import { ArrowRight, ArrowUpDown, ChevronDown, Clock, Info } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
+  useAccount,
+  useBalance,
+  useWriteContract,
+  useWaitForTransactionReceipt,
+  useReadContracts,
+  usePublicClient
+} from 'wagmi'
+import { BaseError, parseUnits, formatUnits } from 'viem'
+import {
+  ChevronDown,
+  Clock,
+  CheckCircle,
+  AlertCircle,
+  ArrowUpDown,
+  Info
+} from 'lucide-react'
+import {
+  TOKENS,
   CONTRACTS,
   FEE_TIERS,
+  getTokenByAddress,
   isNativeTokenAddress,
-  toChainTokenAddress,
-  TOKENS
+  toChainTokenAddress
 } from '@/lib/constants'
 import {
   cn,
@@ -15,26 +33,7 @@ import {
   parseInputAmount,
   shortenAddress
 } from '@/lib/utils'
-import {
-  useAccount,
-  useBalance,
-  usePublicClient,
-  useReadContracts,
-  useWaitForTransactionReceipt,
-  useWriteContract
-} from 'wagmi'
-import { ERC20_ABI } from '@/lib/contracts'
-import { BaseError, parseUnits } from 'viem'
-
-const GAS_LIMIT_CAP = 16_000_000n
-type Step = 'select' | 'searching' | 'found' | 'notFound' | 'addLiquidity'
-type TransactionAction =
-  | 'wrap0'
-  | 'wrap1'
-  | 'approve0'
-  | 'approve1'
-  | 'createPool'
-  | 'addLiquidity'
+import { ERC20_ABI, contractConfig } from '@/lib/contracts'
 
 type Token = {
   address: string
@@ -43,6 +42,14 @@ type Token = {
   decimals: number
 }
 
+type Step = 'select' | 'searching' | 'found' | 'notFound' | 'addLiquidity'
+type TransactionAction =
+  | 'wrap0'
+  | 'wrap1'
+  | 'approve0'
+  | 'approve1'
+  | 'createPool'
+  | 'addLiquidity'
 type ContractWriteParams = {
   address: `0x${string}`
   abi: readonly unknown[]
@@ -50,6 +57,8 @@ type ContractWriteParams = {
   args: readonly unknown[] | [unknown]
   value?: bigint
 }
+
+const GAS_LIMIT_CAP = 16_000_000n
 const WETH_ABI = [
   {
     type: 'function',
@@ -61,12 +70,41 @@ const WETH_ABI = [
 ] as const
 
 export default function LiquidityManager() {
-  // 获取用户钱包信息
   const { address, isConnected } = useAccount()
   const publicClient = usePublicClient()
+  const searchParams = useSearchParams()
 
-  // 用户余额查询数据处理：native token显示为ETH，其他代币显示为symbol
-  const getRequireBalanceLabel = useCallback((token: Token | null) => {
+  const resolveKnownToken = useCallback(
+    (tokenAddress: string): Token | null => {
+      const known = getTokenByAddress(tokenAddress)
+      if (!known) return null
+
+      const isWrappedEth =
+        'wrappedAddress' in known &&
+        typeof known.wrappedAddress === 'string' &&
+        known.wrappedAddress.toLowerCase() === tokenAddress.toLowerCase() &&
+        known.address.toLowerCase() !== tokenAddress.toLowerCase()
+
+      if (isWrappedEth) {
+        return {
+          address: tokenAddress,
+          symbol: 'WETH',
+          name: 'Wrapped Ethereum',
+          decimals: known.decimals
+        }
+      }
+
+      return {
+        address: tokenAddress,
+        symbol: known.symbol,
+        name: known.name,
+        decimals: known.decimals
+      }
+    },
+    []
+  )
+
+  const getRequiredBalanceLabel = useCallback((token: Token | null) => {
     if (!token) return '代币'
     if (isNativeTokenAddress(token.address)) {
       return 'WETH'
@@ -74,49 +112,44 @@ export default function LiquidityManager() {
     return token.symbol
   }, [])
 
-  // 当前步骤状态
+  // 步骤状态
   const [step, setStep] = useState<Step>('select')
-  // const [step, setStep] = useState<Step>('searching')
 
-  // 获取token列表
-  const tokenList = Object.values(TOKENS)
-  // 选择的交易对参数
-  const [selectedToken0Address, setSelectedToken0Address] = useState<string>('')
-  const [selectedToken1Address, setSelectedToken1Address] = useState<string>('')
-  const [selectedFee, setSelectedFee] = useState<number>(FEE_TIERS[0])
-  const [selectedChainId, setSelectedChainId] = useState<number>(11155111)
+  // 选择参数
+  const [selectedToken0Address, setSelectedToken0Address] = useState('')
+  const [selectedToken1Address, setSelectedToken1Address] = useState('')
+  const [selectedFee, setSelectedFee] = useState(3000)
+  const [selectedChainId, setSelectedChainId] = useState(11155111) // Sepolia
 
-  const [isCheckingPool, setIsCheckingPool] = useState<boolean>(false)
-  // 实际选中的 Token 对象
+  // 代币信息（从链上获取或已知代币）
   const [token0, setToken0] = useState<Token | null>(null)
   const [token1, setToken1] = useState<Token | null>(null)
 
-  const [initialPrice, setInitialPrice] = useState('1')
   const [amount0, setAmount0] = useState('')
   const [amount1, setAmount1] = useState('')
+  const [initialPrice, setInitialPrice] = useState('1') // 初始价格比率（token0:token1）
 
-  const [searchError, setSearchError] = useState<string | null>(null)
-  const [poolExists, setPoolExists] = useState<boolean>(false)
+  const [needsApproval0, setNeedsApproval0] = useState(false)
+  const [needsApproval1, setNeedsApproval1] = useState(false)
+  const [isCalculating, setIsCalculating] = useState(false)
+  const [poolExists, setPoolExists] = useState(false)
   const [currentPool, setCurrentPool] = useState<string | null>(null)
   const [poolIndex, setPoolIndex] = useState<number | null>(null)
-
-  const [needsApproval0, setNeedsApproval0] = useState<boolean>(false)
-  const [needsApproval1, setNeedsApproval1] = useState<boolean>(false)
-  const [isCheckingAllowance, setIsCheckingAllowance] = useState<Boolean>(false)
-  const [isCalculating, setIsCalculating] = useState(false)
+  const [isCheckingPool, setIsCheckingPool] = useState(false)
+  const [isCheckingAllowance, setIsCheckingAllowance] = useState(false)
   const [priceError, setPriceError] = useState<string | null>(null)
-
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [transactionAction, setTransactionAction] =
     useState<TransactionAction | null>(null)
   const [transactionError, setTransactionError] = useState<string | null>(null)
 
   // 合约交互
   const { writeContract, data: hash, isPending } = useWriteContract()
-
   const getErrorMessage = useCallback((error: unknown) => {
     if (error instanceof BaseError) {
       return error.shortMessage || error.message
     }
+
     if (error instanceof Error) {
       return error.message
     }
@@ -149,7 +182,7 @@ export default function LiquidityManager() {
         value
       } as never)
 
-      const gas = (estimatedGas * 12n) / 10n // 安全余量 buffer
+      const gas = (estimatedGas * 12n) / 10n
 
       writeContract({
         account: address,
@@ -165,16 +198,131 @@ export default function LiquidityManager() {
   )
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
-    useWaitForTransactionReceipt({ hash })
+    useWaitForTransactionReceipt({
+      hash
+    })
 
-  // TODO: 当用户输入地址时，自动查询并显示代币信息（symbol, decimals等），可以使用useReadContracts批量查询两个代币的信息
-  // const { data: token0Data } = useReadContracts({
-  //   contracts: [],
-  //   query: {
-  //     enabled: !!selectedToken0Address
-  //   }
-  // })
-  // console.log('token0Data', token0Data)
+  // 处理 URL 参数（用于预填充）
+  const paramToken0 = searchParams.get('token0') as `0x${string}`
+  const paramToken1 = searchParams.get('token1') as `0x${string}`
+
+  useEffect(() => {
+    if (paramToken0) {
+      setSelectedToken0Address(paramToken0)
+    }
+    if (paramToken1) {
+      setSelectedToken1Address(paramToken1)
+    }
+  }, [paramToken0, paramToken1])
+
+  // 获取代币信息
+  const { data: token0Data } = useReadContracts({
+    contracts:
+      selectedToken0Address && !isNativeTokenAddress(selectedToken0Address)
+        ? [
+            {
+              address: selectedToken0Address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: 'symbol' as const
+            },
+            {
+              address: selectedToken0Address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: 'name' as const
+            },
+            {
+              address: selectedToken0Address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: 'decimals' as const
+            }
+          ]
+        : [],
+    query: {
+      enabled:
+        !!selectedToken0Address && !isNativeTokenAddress(selectedToken0Address)
+    }
+  })
+
+  const { data: token1Data } = useReadContracts({
+    contracts:
+      selectedToken1Address && !isNativeTokenAddress(selectedToken1Address)
+        ? [
+            {
+              address: selectedToken1Address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: 'symbol' as const
+            },
+            {
+              address: selectedToken1Address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: 'name' as const
+            },
+            {
+              address: selectedToken1Address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: 'decimals' as const
+            }
+          ]
+        : [],
+    query: {
+      enabled:
+        !!selectedToken1Address && !isNativeTokenAddress(selectedToken1Address)
+    }
+  })
+
+  useEffect(() => {
+    if (selectedToken0Address && token0Data) {
+      const [symbol, name, decimals] = token0Data
+      if (
+        symbol?.status === 'success' &&
+        name?.status === 'success' &&
+        decimals?.status === 'success'
+      ) {
+        setToken0({
+          address: selectedToken0Address,
+          symbol: String(symbol.result || ''),
+          name: String(name.result || ''),
+          decimals: Number(decimals.result || 18)
+        })
+      } else {
+        const known = resolveKnownToken(selectedToken0Address)
+        if (known) setToken0(known)
+      }
+    } else if (
+      selectedToken0Address &&
+      isNativeTokenAddress(selectedToken0Address)
+    ) {
+      const known = resolveKnownToken(selectedToken0Address)
+      if (known) setToken0(known)
+    }
+  }, [selectedToken0Address, token0Data, resolveKnownToken])
+
+  useEffect(() => {
+    if (selectedToken1Address && token1Data) {
+      const [symbol, name, decimals] = token1Data
+      if (
+        symbol?.status === 'success' &&
+        name?.status === 'success' &&
+        decimals?.status === 'success'
+      ) {
+        setToken1({
+          address: selectedToken1Address,
+          symbol: String(symbol.result || ''),
+          name: String(name.result || ''),
+          decimals: Number(decimals.result || 18)
+        })
+      } else {
+        const known = resolveKnownToken(selectedToken1Address)
+        if (known) setToken1(known)
+      }
+    } else if (
+      selectedToken1Address &&
+      isNativeTokenAddress(selectedToken1Address)
+    ) {
+      const known = resolveKnownToken(selectedToken1Address)
+      if (known) setToken1(known)
+    }
+  }, [selectedToken1Address, token1Data, resolveKnownToken])
 
   // 获取代币余额
   const { data: token0Balance, refetch: refetchToken0Balance } = useBalance({
@@ -204,6 +352,8 @@ export default function LiquidityManager() {
     }
   })
 
+  const tokenList = Object.values(TOKENS)
+
   const fetchPoolStatus = useCallback(async () => {
     const response = await fetch('/api/pools/check', {
       method: 'POST',
@@ -224,13 +374,506 @@ export default function LiquidityManager() {
     return response
   }, [selectedToken0Address, selectedToken1Address, selectedFee])
 
-  // 判断两种代币是否有余额
-  const hasInsuffientBalance0 = (() => {
+  const applyPoolStatus = useCallback(
+    (response: {
+      exists: boolean
+      poolAddress?: string
+      poolIndex?: number
+    }) => {
+      if (response.exists) {
+        setPoolExists(true)
+        setCurrentPool(response.poolAddress || null)
+        setPoolIndex(response.poolIndex ?? null)
+        return
+      }
+
+      setPoolExists(false)
+      setCurrentPool(null)
+      setPoolIndex(null)
+    },
+    []
+  )
+
+  // 搜索池子
+  const searchPool = useCallback(async () => {
+    if (!selectedToken0Address || !selectedToken1Address) {
+      setSearchError('请选择两个代币地址')
+      return
+    }
+
+    if (
+      selectedToken0Address.toLowerCase() ===
+      selectedToken1Address.toLowerCase()
+    ) {
+      setSearchError('请选择不同的代币')
+      return
+    }
+
+    setStep('searching')
+    setIsCheckingPool(true)
+    setSearchError(null)
+    setTransactionError(null)
+
+    try {
+      const response = await fetchPoolStatus()
+      applyPoolStatus(response)
+      setStep(response.exists ? 'found' : 'notFound')
+    } catch (error) {
+      console.error('搜索池子失败:', error)
+      setSearchError(error instanceof Error ? error.message : '搜索池子失败')
+      setPoolExists(false)
+      setCurrentPool(null)
+      setPoolIndex(null)
+      setStep('notFound')
+    } finally {
+      setIsCheckingPool(false)
+    }
+  }, [
+    selectedToken0Address,
+    selectedToken1Address,
+    fetchPoolStatus,
+    applyPoolStatus
+  ])
+
+  const refreshPoolStatus = useCallback(async () => {
+    if (!selectedToken0Address || !selectedToken1Address) return
+
+    setIsCheckingPool(true)
+    try {
+      const response = await fetchPoolStatus()
+      applyPoolStatus(response)
+    } catch (error) {
+      console.error('刷新池子状态失败:', error)
+    } finally {
+      setIsCheckingPool(false)
+    }
+  }, [
+    selectedToken0Address,
+    selectedToken1Address,
+    fetchPoolStatus,
+    applyPoolStatus
+  ])
+
+  const refreshBalances = useCallback(async () => {
+    await Promise.all([
+      refetchToken0Balance(),
+      refetchToken1Balance(),
+      refetchNativeBalance()
+    ])
+  }, [refetchToken0Balance, refetchToken1Balance, refetchNativeBalance])
+
+  // 检查授权
+  const checkAllowance = useCallback(async () => {
+    if (!address || !token0 || !token1 || !amount0 || !amount1) {
+      setNeedsApproval0(false)
+      setNeedsApproval1(false)
+      return
+    }
+
+    try {
+      setIsCheckingAllowance(true)
+      setTransactionError(null)
+      const allowance0Response = await fetch('/api/allowance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          token: toChainTokenAddress(token0.address),
+          owner: address,
+          spender: CONTRACTS.POSITION_MANAGER
+        })
+      }).then((res) => res.json())
+
+      const allowance1Response = await fetch('/api/allowance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          token: toChainTokenAddress(token1.address),
+          owner: address,
+          spender: CONTRACTS.POSITION_MANAGER
+        })
+      }).then((res) => res.json())
+
+      if (allowance0Response.success && allowance1Response.success) {
+        const amountWei0 = parseUnits(amount0, token0.decimals)
+        const amountWei1 = parseUnits(amount1, token1.decimals)
+
+        setNeedsApproval0(BigInt(allowance0Response.allowance) < amountWei0)
+        setNeedsApproval1(BigInt(allowance1Response.allowance) < amountWei1)
+      }
+    } catch (error) {
+      console.error('检查授权失败:', error)
+    } finally {
+      setIsCheckingAllowance(false)
+    }
+  }, [address, token0, token1, amount0, amount1])
+
+  useEffect(() => {
+    checkAllowance()
+  }, [amount0, amount1, token0, token1, address, checkAllowance])
+
+  // 授权代币
+  const approveToken = useCallback(
+    async (tokenAddress: string, amount: string, decimals: number) => {
+      if (!address) return
+
+      try {
+        const amountWei = parseUnits(amount, decimals)
+        const actualTokenAddress = toChainTokenAddress(tokenAddress)
+        setTransactionAction(
+          tokenAddress === token0?.address ? 'approve0' : 'approve1'
+        )
+        setTransactionError(null)
+
+        await writeContractWithEstimatedGas({
+          address: actualTokenAddress as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [CONTRACTS.POSITION_MANAGER as `0x${string}`, amountWei]
+        })
+      } catch (error) {
+        setTransactionAction(null)
+        setTransactionError(getErrorMessage(error))
+      }
+    },
+    [address, token0?.address, writeContractWithEstimatedGas, getErrorMessage]
+  )
+
+  // 计算初始价格对应的 sqrtPriceX96
+  const calculateSqrtPriceX96 = useCallback((price: string): bigint => {
+    try {
+      const priceRatio = parseFloat(price)
+      if (priceRatio <= 0 || !isFinite(priceRatio)) {
+        return BigInt(0)
+      }
+
+      // sqrtPriceX96 = sqrt(price) * 2^96
+      // price = reserve1 / reserve0
+      // 使用简化的计算方式
+      const Q96 = BigInt(2) ** BigInt(96)
+      const sqrtPrice = Math.sqrt(priceRatio)
+      return BigInt(Math.floor(sqrtPrice * Number(Q96)))
+    } catch {
+      return BigInt(0)
+    }
+  }, [])
+
+  // 创建池子并添加初始流动性
+  const createPoolAndAddLiquidity = useCallback(async () => {
+    if (!address || !amount0 || !amount1 || !token0 || !token1) return
+
+    try {
+      const amountWei0 = parseUnits(amount0, token0.decimals)
+      const amountWei1 = parseUnits(amount1, token1.decimals)
+      const actualToken0Address = toChainTokenAddress(token0.address)
+      const actualToken1Address = toChainTokenAddress(token1.address)
+
+      // 确保token0地址小于token1地址
+      let sortedToken0Address = actualToken0Address
+      let sortedToken1Address = actualToken1Address
+      let sortedAmount0 = amountWei0
+      let sortedAmount1 = amountWei1
+
+      if (BigInt(actualToken0Address) > BigInt(actualToken1Address)) {
+        sortedToken0Address = actualToken1Address
+        sortedToken1Address = actualToken0Address
+        sortedAmount0 = amountWei1
+        sortedAmount1 = amountWei0
+      }
+
+      // 计算初始价格
+      const priceRatio = parseFloat(initialPrice)
+      if (priceRatio <= 0 || !isFinite(priceRatio)) {
+        setPriceError('请输入有效的价格比率')
+        return
+      }
+
+      // 计算 sqrtPriceX96
+      // 注意：如果 token0 和 token1 交换了，价格也需要调整
+      const actualPrice =
+        BigInt(actualToken0Address) < BigInt(actualToken1Address)
+          ? priceRatio
+          : 1 / priceRatio
+
+      const sqrtPriceX96 = calculateSqrtPriceX96(actualPrice.toString())
+      if (sqrtPriceX96 === BigInt(0)) {
+        setPriceError('价格计算失败，请检查输入')
+        return
+      }
+
+      setPriceError(null)
+
+      // 创建池子并初始化
+      setTransactionAction('createPool')
+      setTransactionError(null)
+      await writeContractWithEstimatedGas({
+        address: CONTRACTS.POOL_MANAGER as `0x${string}`,
+        abi: contractConfig.poolManager.abi,
+        functionName: 'createAndInitializePoolIfNecessary',
+        args: [
+          {
+            token0: sortedToken0Address as `0x${string}`,
+            token1: sortedToken1Address as `0x${string}`,
+            fee: selectedFee,
+            tickLower: -887272, // 全范围
+            tickUpper: 887272,
+            sqrtPriceX96
+          }
+        ]
+      })
+    } catch (error) {
+      console.error('创建池子失败:', error)
+      setTransactionAction(null)
+      setPriceError(getErrorMessage(error))
+    }
+  }, [
+    address,
+    amount0,
+    amount1,
+    token0,
+    token1,
+    selectedFee,
+    initialPrice,
+    calculateSqrtPriceX96,
+    writeContractWithEstimatedGas,
+    getErrorMessage
+  ])
+
+  // 添加流动性到已存在的池子
+  const addLiquidity = useCallback(async () => {
+    if (
+      !address ||
+      !amount0 ||
+      !amount1 ||
+      !token0 ||
+      !token1 ||
+      !currentPool ||
+      poolIndex === null
+    )
+      return
+
+    try {
+      const latestPoolStatus = await fetchPoolStatus()
+      applyPoolStatus(latestPoolStatus)
+
+      if (
+        !latestPoolStatus.exists ||
+        latestPoolStatus.poolIndex === undefined
+      ) {
+        throw new Error('当前费率下未找到可用池子，请重新搜索资金池')
+      }
+
+      const amountWei0 = parseUnits(amount0, token0.decimals)
+      const amountWei1 = parseUnits(amount1, token1.decimals)
+      const actualToken0Address = toChainTokenAddress(token0.address)
+      const actualToken1Address = toChainTokenAddress(token1.address)
+
+      // 确保token0地址小于token1地址
+      let sortedToken0Address = actualToken0Address
+      let sortedToken1Address = actualToken1Address
+      let sortedAmount0 = amountWei0
+      let sortedAmount1 = amountWei1
+
+      if (BigInt(actualToken0Address) > BigInt(actualToken1Address)) {
+        sortedToken0Address = actualToken1Address
+        sortedToken1Address = actualToken0Address
+        sortedAmount0 = amountWei1
+        sortedAmount1 = amountWei0
+      }
+
+      // 调用 PositionManager 的 mint 函数
+      setTransactionAction('addLiquidity')
+      setTransactionError(null)
+      await writeContractWithEstimatedGas({
+        address: CONTRACTS.POSITION_MANAGER as `0x${string}`,
+        abi: contractConfig.positionManager.abi,
+        functionName: 'mint',
+        args: [
+          {
+            token0: sortedToken0Address as `0x${string}`,
+            token1: sortedToken1Address as `0x${string}`,
+            index: latestPoolStatus.poolIndex,
+            amount0Desired: sortedAmount0,
+            amount1Desired: sortedAmount1,
+            recipient: address,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 1200)
+          }
+        ]
+      })
+    } catch (error) {
+      console.error('添加流动性失败:', error)
+      setTransactionAction(null)
+      setTransactionError(getErrorMessage(error))
+    }
+  }, [
+    address,
+    amount0,
+    amount1,
+    token0,
+    token1,
+    currentPool,
+    poolIndex,
+    fetchPoolStatus,
+    applyPoolStatus,
+    writeContractWithEstimatedGas,
+    getErrorMessage
+  ])
+
+  // 计算对应数量
+  const calculateAmount = useCallback(
+    async (inputToken: 'token0' | 'token1', amount: string) => {
+      if (!amount || parseFloat(amount) === 0) {
+        if (inputToken === 'token0') {
+          setAmount1('')
+        } else {
+          setAmount0('')
+        }
+        setPriceError(null)
+        return
+      }
+
+      setIsCalculating(true)
+      setPriceError(null)
+
+      try {
+        if (poolExists && currentPool && token0 && token1) {
+          // 如果池子存在，使用池子价格计算
+          const response = await fetch('/api/pools/price', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              poolAddress: currentPool,
+              inputToken:
+                inputToken === 'token0' ? token0.address : token1.address,
+              inputAmount: amount
+            })
+          })
+
+          const data = await response.json()
+
+          if (!response.ok || !data.success) {
+            const errorMsg = data.msg || data.error || '计算价格失败'
+            setPriceError(errorMsg)
+            // 如果计算失败，清空对应的输出金额
+            if (inputToken === 'token0') {
+              setAmount1('')
+            } else {
+              setAmount0('')
+            }
+            return
+          }
+
+          // 成功计算
+          if (inputToken === 'token0') {
+            setAmount1(data.outputAmount)
+          } else {
+            setAmount0(data.outputAmount)
+          }
+          setPriceError(null)
+        } else {
+          // 如果池子不存在，使用初始价格比率计算
+          const priceRatio = parseFloat(initialPrice)
+          if (priceRatio > 0 && isFinite(priceRatio)) {
+            try {
+              if (inputToken === 'token0') {
+                const calculated = parseFloat(amount) * priceRatio
+                setAmount1(isNaN(calculated) ? '' : calculated.toString())
+              } else {
+                const calculated = parseFloat(amount) / priceRatio
+                setAmount0(isNaN(calculated) ? '' : calculated.toString())
+              }
+              setPriceError(null)
+            } catch (calcError) {
+              console.error('价格计算错误:', calcError)
+              setPriceError('价格计算失败，请检查输入')
+              if (inputToken === 'token0') {
+                setAmount1('')
+              } else {
+                setAmount0('')
+              }
+            }
+          } else {
+            // 默认 1:1
+            if (inputToken === 'token0') {
+              setAmount1(amount)
+            } else {
+              setAmount0(amount)
+            }
+            setPriceError(null)
+          }
+        }
+      } catch (error) {
+        console.error('计算数量失败:', error)
+        const errorMsg = error instanceof Error ? error.message : '计算价格失败'
+        setPriceError(errorMsg)
+        // 清空对应的输出金额
+        if (inputToken === 'token0') {
+          setAmount1('')
+        } else {
+          setAmount0('')
+        }
+      } finally {
+        setIsCalculating(false)
+      }
+    },
+    [poolExists, currentPool, token0, token1, initialPrice]
+  )
+
+  const handleAmount0Change = (value: string) => {
+    const parsed = parseInputAmount(value)
+    setAmount0(parsed)
+    calculateAmount('token0', parsed)
+  }
+
+  const handleAmount1Change = (value: string) => {
+    const parsed = parseInputAmount(value)
+    setAmount1(parsed)
+    calculateAmount('token1', parsed)
+  }
+
+  const handleInitialPriceChange = (value: string) => {
+    const parsed = parseInputAmount(value)
+    setInitialPrice(parsed)
+    // 重新计算数量0
+    if (amount0) {
+      calculateAmount('token0', amount0)
+    } else if (amount1) {
+      calculateAmount('token1', amount1)
+    }
+  }
+
+  const handleMaxAmount0 = () => {
+    const maxBalance =
+      token0 && isNativeTokenAddress(token0.address)
+        ? nativeBalance
+        : token0Balance
+    if (maxBalance) {
+      setAmount0(maxBalance.formatted)
+      calculateAmount('token0', maxBalance.formatted)
+    }
+  }
+
+  const handleMaxAmount1 = () => {
+    const maxBalance =
+      token1 && isNativeTokenAddress(token1.address)
+        ? nativeBalance
+        : token1Balance
+    if (maxBalance) {
+      setAmount1(maxBalance.formatted)
+      calculateAmount('token1', maxBalance.formatted)
+    }
+  }
+
+  const hasInsufficientBalance0 = (() => {
     const availableBalance =
       token0 && isNativeTokenAddress(token0.address)
         ? nativeBalance
         : token0Balance
-
     if (!token0 || !availableBalance || !amount0) return false
     try {
       return parseUnits(amount0, token0.decimals) > availableBalance.value
@@ -238,21 +881,20 @@ export default function LiquidityManager() {
       return false
     }
   })()
-  const hasInsuffientBalance1 = (() => {
-    const availableBalance =
-      token0 && isNativeTokenAddress(token0.address)
-        ? nativeBalance
-        : token0Balance
 
-    if (!token0 || !availableBalance || !amount0) return false
+  const hasInsufficientBalance1 = (() => {
+    const availableBalance =
+      token1 && isNativeTokenAddress(token1.address)
+        ? nativeBalance
+        : token1Balance
+    if (!token1 || !availableBalance || !amount1) return false
     try {
-      return parseUnits(amount0, token0.decimals) > availableBalance.value
+      return parseUnits(amount1, token1.decimals) > availableBalance.value
     } catch {
       return false
     }
   })()
 
-  // 输入值 转换 链上值
   const needsWrap0 = (() => {
     if (
       !token0 ||
@@ -263,7 +905,7 @@ export default function LiquidityManager() {
       return false
     try {
       return parseUnits(amount0, token0.decimals) > token0Balance.value
-    } catch (error) {
+    } catch {
       return false
     }
   })()
@@ -278,7 +920,7 @@ export default function LiquidityManager() {
       return false
     try {
       return parseUnits(amount1, token1.decimals) > token1Balance.value
-    } catch (error) {
+    } catch {
       return false
     }
   })()
@@ -317,306 +959,84 @@ export default function LiquidityManager() {
     [address, token0?.address, writeContractWithEstimatedGas, getErrorMessage]
   )
 
-  // 输入代币数量时自动计算另外一种代币数量
-  const calculateAmount = useCallback(
-    async (inputToken: 'token0' | 'token1', amount: string) => {
-      if (!amount || parseFloat(amount) === 0) {
-        if (inputToken === 'token0') {
-          setAmount1('')
-        } else {
-          setAmount0('')
-        }
+  const handleSwapTokens = () => {
+    const temp = selectedToken0Address
+    setSelectedToken0Address(selectedToken1Address)
+    setSelectedToken1Address(temp)
+    if (token0 && token1) {
+      setToken0(token1)
+      setToken1(token0)
+      setAmount0(amount1)
+      setAmount1(amount0)
+      // 交换价格比率
+      const priceRatio = parseFloat(initialPrice)
+      if (priceRatio > 0 && isFinite(priceRatio)) {
+        setInitialPrice((1 / priceRatio).toString())
       }
-
-      setIsCalculating(true)
-      setPriceError(null)
-
-      try {
-        if (poolExists && currentPool && token0 && token1) {
-          // 如果池子存在，使用池子价格计算
-          const response = await fetch('/api/pools/price', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              poolAddress: currentPool,
-              inputToken:
-                inputToken === 'token0' ? token0.address : token1.address,
-              inputAmount: amount
-            })
-          })
-
-          const data = await response.json()
-
-          if (!response.ok || !data.success) {
-            const errorMsg = data.msg || data.error || '计算价格失败'
-            setPriceError(errorMsg)
-            // 如果计算失败，清空对应的输入金额
-            if (inputToken === 'token0') {
-              setAmount1('')
-            } else {
-              setAmount0('')
-            }
-            return
-          }
-
-          // 计算成功
-          if (inputToken === 'token0') {
-            setAmount1(data.outputAmount)
-          } else {
-            setAmount0(data.outputAmount)
-          }
-          setPriceError(null)
-        } else {
-          // 如果池子不存在，使用初始价格比率计算
-          const priceRatio = parseFloat(initialPrice)
-          if (priceRatio > 0 && isFinite(priceRatio)) {
-            try {
-              if (inputToken === 'token0') {
-                const calculated = parseFloat(amount) * priceRatio
-                setAmount1(isNaN(calculated) ? '' : calculated.toString())
-              } else {
-                const calculated = parseFloat(amount) * priceRatio
-                setAmount0(isNaN(calculated) ? '' : calculated.toString())
-              }
-              setPriceError(null)
-            } catch (error) {
-              console.log('价格计算错误', error)
-              setPriceError('价格失败，请检查输入')
-              if (inputToken === 'token0') {
-                setAmount1('')
-              } else {
-                setAmount0('')
-              }
-            }
-          } else {
-            // 默认 1:1
-            if (inputToken === 'token0') {
-              setAmount1(amount)
-            } else {
-              setAmount0(amount)
-            }
-            setPriceError(null)
-          }
-        }
-      } catch (error) {
-        console.log('计算数量失败：', error)
-        const errorMsg = error instanceof Error ? error.message : '计算价格失败'
-        setPriceError(errorMsg)
-
-        if (inputToken === 'token0') {
-          setAmount1('')
-        } else {
-          setAmount0('')
-        }
-      } finally {
-        setIsCalculating(false)
-      }
-    },
-    [poolExists, currentPool, token0, token1, initialPrice]
-  )
-
-  const handleAmount0Change = (value: string) => {
-    const parsed = parseInputAmount(value)
-    setAmount0(parsed)
-    // 这里可以添加逻辑，自动计算amount1的值
-    calculateAmount('token0', parsed)
-  }
-
-  const handleAmount1Change = (value: string) => {
-    const parsed = parseInputAmount(value)
-    setAmount1(parsed)
-    calculateAmount('token1', parsed)
-  }
-
-  const handleSwapTokens = () => {}
-
-  const handleInitialPriceChange = (value: string) => {
-    // 这里可以添加输入验证，确保用户输入的是有效的数字
-    const parsedValue = parseInputAmount(value)
-    setInitialPrice(parsedValue)
-    // 重新计算数量
-    if (amount0) {
-      calculateAmount('token0', amount0)
-    } else if (amount1) {
-      calculateAmount('token1', amount1)
     }
   }
 
-  const backToSelect = () => {
-    setStep('select')
-    setSearchError(null)
+  // 使用找到的池子
+  const useFoundPool = () => {
+    setStep('addLiquidity')
   }
 
+  // 创建新池子
   const createNewPool = () => {
     setStep('addLiquidity')
   }
 
-  const applyPoolStatus = useCallback(
-    (response: {
-      exists: boolean
-      poolAddress?: string
-      poolIndex?: number
-    }) => {
-      if (response.exists) {
-        setPoolExists(true)
-        setCurrentPool(response.poolAddress || null)
-        setPoolIndex(response.poolIndex ?? null)
-        return
-      }
-
-      setPoolExists(false)
-      setCurrentPool(null)
-      setPoolIndex(null)
-    },
-    []
-  )
-
-  const searchPool = useCallback(async () => {
-    if (!selectedToken0Address || !selectedToken1Address) {
-      setSearchError('请选择两个代币')
-      return
-    }
-    if (
-      selectedToken0Address.toLowerCase() ===
-      selectedToken1Address.toLowerCase()
-    ) {
-      setSearchError('请选择不同的代币')
-      return
-    }
-    setStep('searching')
-    setIsCheckingPool(true)
+  // 返回重新选择
+  const backToSelect = () => {
+    setStep('select')
     setSearchError(null)
+    setPriceError(null)
+    setTransactionError(null)
+  }
 
-    try {
-      const response = await fetchPoolStatus()
-      applyPoolStatus(response)
-      setStep(response.exists ? 'found' : 'notFound')
-    } catch (error) {
-      console.error('搜索池子失败:', error)
-      setSearchError(
-        error instanceof Error ? error.message : '搜索池子失败，请重试'
-      )
-      setPoolExists(false)
-      setCurrentPool(null)
-      setPoolIndex(null)
-      setStep('notFound')
-    } finally {
-      setIsCheckingPool(false)
-    }
-  }, [
-    selectedToken0Address,
-    selectedToken1Address,
-    applyPoolStatus,
-    fetchPoolStatus
-  ])
-
-  const refreshPoolStatus = useCallback(async () => {
-    if (!selectedToken0Address || !selectedToken1Address) {
-      setIsCheckingPool(true)
-      try {
-        const response = await fetchPoolStatus()
-        applyPoolStatus(response)
-      } catch (error) {
-        console.log('刷新池子状态失败：', error)
-      } finally {
-        setIsCheckingPool(false)
-      }
-    }
-  }, [
-    selectedToken0Address,
-    selectedToken1Address,
-    fetchPoolStatus,
-    applyPoolStatus
-  ])
-
-  const refreshBalances = useCallback(async () => {
-    await Promise.all([
-      refetchToken0Balance(),
-      refetchToken1Balance(),
-      refetchNativeBalance()
-    ])
-  }, [refetchToken0Balance, refetchToken1Balance, refetchNativeBalance])
-
-  // 检查授权
-  const checkAllowance = useCallback(async () => {
-    if (!address || !token0 || !token1 || !amount0 || !amount1) {
-      setNeedsApproval0(false)
-      setNeedsApproval1(false)
-      return
-    }
-    try {
-      setIsCheckingAllowance(true)
-      setTransactionError(null)
-      const allowance0Response = await fetch('/api/allowance', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          token: toChainTokenAddress(token0.address),
-          owner: address,
-          spender: CONTRACTS.POSITION_MANAGER
-        })
-      }).then((res) => res.json())
-
-      const allowance1Response = await fetch('/api/allowance', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          token: toChainTokenAddress(token0.address),
-          owner: address,
-          spender: CONTRACTS.POSITION_MANAGER
-        })
-      }).then((res) => res.json())
-
-      if (allowance0Response.success && allowance1Response.success) {
-        const amountWei0 = parseUnits(amount0, token0.decimals)
-        const amountWei1 = parseUnits(amount1, token1.decimals)
-
-        setNeedsApproval0(BigInt(allowance0Response.allowance) < amountWei0)
-        setNeedsApproval1(BigInt(allowance1Response.allowance) < amountWei1)
-      }
-    } catch (error) {
-      console.error('检查授权失败：', error)
-    } finally {
-      setIsCheckingAllowance(false)
-    }
-  }, [address, token0, token1, amount0, amount1])
-
+  // 交易成功后刷新池子状态
   useEffect(() => {
-    checkAllowance()
-  }, [amount0, amount1, token0, token1, address, checkAllowance])
+    if (!isConfirmed || step !== 'addLiquidity' || !transactionAction) return
 
-  // 授权代币
-  const approveToken = useCallback(
-    async (tokenAddress: string, amount: string, decimals: number) => {
-      if (!address) return
+    const timer = setTimeout(() => {
+      ;(async () => {
+        if (transactionAction === 'wrap0' || transactionAction === 'wrap1') {
+          await refreshBalances()
+          await checkAllowance()
+        }
 
-      try {
-        const amountWei = parseUnits(amount, decimals)
-        const actualTokenAddress = toChainTokenAddress(tokenAddress)
-        setTransactionAction(
-          tokenAddress === token0?.address ? 'approve0' : 'approve1'
-        )
-        setTransactionError(null)
+        if (
+          transactionAction === 'approve0' ||
+          transactionAction === 'approve1'
+        ) {
+          await refreshBalances()
+          await checkAllowance()
+        }
 
-        await writeContractWithEstimatedGas({
-          address: actualTokenAddress as `0x${string}`,
-          abi: ERC20_ABI,
-          functionName: 'approve',
-          args: [CONTRACTS.POSITION_MANAGER as `0x${string}`, amountWei]
-        })
-      } catch (error) {
+        if (transactionAction === 'createPool') {
+          await refreshPoolStatus()
+          await refreshBalances()
+        }
+
+        if (transactionAction === 'addLiquidity') {
+          await refreshPoolStatus()
+          await refreshBalances()
+          await checkAllowance()
+        }
+
         setTransactionAction(null)
-        setTransactionError(getErrorMessage(error))
-      }
-    },
-    [address, token0?.address, writeContractWithEstimatedGas, getErrorMessage]
-  )
+      })()
+    }, 1500)
+
+    return () => clearTimeout(timer)
+  }, [
+    isConfirmed,
+    step,
+    transactionAction,
+    refreshPoolStatus,
+    refreshBalances,
+    checkAllowance
+  ])
 
   const TokenSelector = ({
     selectedToken,
@@ -630,20 +1050,22 @@ export default function LiquidityManager() {
     otherToken: Token
   }) => {
     const [isOpen, setIsOpen] = useState(false)
+
     return (
       <div className="relative">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center space-x-2 bg-secondary hover:bg-secondary/80 px-3 py-2 rounded-lg transition-colors"
+          className="flex items-center space-x-2 bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-2 rounded-lg transition-colors"
         >
-          <div className="w-6 h-6 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
-            <span className="font-bold text-white text-xs">
+          <div className="w-6 h-6 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+            <span className="text-white text-xs font-bold">
               {selectedToken.symbol[0]}
             </span>
           </div>
           <span className="font-medium">{selectedToken.symbol}</span>
           <ChevronDown className="w-4 h-4" />
         </button>
+
         {isOpen && (
           <div className="absolute top-full mt-1 w-48 bg-background border border-border rounded-lg shadow-lg z-50">
             <div className="p-2">
@@ -689,15 +1111,63 @@ export default function LiquidityManager() {
     )
   }
 
-  const renderSelect = () => (
+  // 交易状态显示
+  const TransactionStatus = () => {
+    if (!hash) return null
+
+    const actionLabel =
+      transactionAction === 'approve0' || transactionAction === 'approve1'
+        ? '授权'
+        : transactionAction === 'wrap0' || transactionAction === 'wrap1'
+          ? '包装 ETH'
+          : transactionAction === 'createPool'
+            ? '创建池子'
+            : transactionAction === 'addLiquidity'
+              ? '添加流动性'
+              : '交易'
+
+    return (
+      <div className="mb-6 p-4 bg-primary/10 border border-primary/20 rounded-lg">
+        <div className="flex items-center space-x-2">
+          {isPending && (
+            <>
+              <Clock className="w-5 h-5 text-primary animate-spin" />
+              <span className="text-primary">{actionLabel}等待钱包确认...</span>
+            </>
+          )}
+          {isConfirming && (
+            <>
+              <Clock className="w-5 h-5 text-primary animate-spin" />
+              <span className="text-primary">{actionLabel}确认中...</span>
+            </>
+          )}
+          {isConfirmed && (
+            <>
+              <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
+              <span className="text-green-700 dark:text-green-300">
+                {actionLabel}成功！
+              </span>
+            </>
+          )}
+        </div>
+        <div className="mt-2 text-sm text-primary">
+          交易哈希: {shortenAddress(hash)}
+        </div>
+      </div>
+    )
+  }
+
+  // 选择界面
+  const renderSelectStep = () => (
     <>
       <div className="mb-6">
         <h3 className="text-lg font-semibold text-card-foreground mb-4">
           选择交易对参数
         </h3>
+
         {/* Token0 Address */}
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1 text-muted-foreground">
+          <label className="block text-sm font-medium text-muted-foreground mb-2">
             代币 0 地址
           </label>
           <div className="flex space-x-2">
@@ -714,14 +1184,15 @@ export default function LiquidityManager() {
                 setSelectedToken0Address(token.address)
                 setToken0(token)
               }}
-              label="选择 Token0"
+              label="快速选择"
               otherToken={token1 || tokenList[1]}
             />
           </div>
         </div>
+
         {/* Token1 Address */}
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1 text-muted-foreground">
+          <label className="block text-sm font-medium text-muted-foreground mb-2">
             代币 1 地址
           </label>
           <div className="flex space-x-2">
@@ -738,105 +1209,198 @@ export default function LiquidityManager() {
                 setSelectedToken1Address(token.address)
                 setToken1(token)
               }}
-              label="选择 Token1"
+              label="快速选择"
               otherToken={token0 || tokenList[0]}
             />
           </div>
         </div>
-        {/* 交易费率 */}
+
+        {/* Fee Selection */}
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1 text-muted-foreground">
-            交易费率
+          <label className="block text-sm font-medium text-muted-foreground mb-2">
+            费率
           </label>
           <div className="flex space-x-2">
             {FEE_TIERS.map((feeValue) => (
               <button
                 key={feeValue}
-                className={`flex-1 px-3 py-2 rounded transition-colors ${
-                  selectedFee === feeValue
-                    ? 'bg-primary text-white'
-                    : 'bg-secondary hover:bg-secondary/80'
-                }`}
                 onClick={() => setSelectedFee(feeValue)}
+                className={cn(
+                  'px-3 py-2 rounded text-sm transition-colors flex-1',
+                  selectedFee === feeValue
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted hover:bg-accent'
+                )}
               >
                 {feeValue / 10000}%
               </button>
             ))}
           </div>
         </div>
-        {/* 链 ID */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1 text-muted-foreground">
+
+        {/* Chain ID */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-muted-foreground mb-2">
             链 ID
           </label>
           <input
-            type="text"
+            type="number"
             value={selectedChainId}
             onChange={(e) =>
               setSelectedChainId(parseInt(e.target.value) || 11155111)
             }
-            placeholder="例如：11155111"
-            className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
           />
-          <div className="text-xs text-muted-foreground">
+          <div className="mt-1 text-xs text-muted-foreground">
             当前: Sepolia (11155111)
           </div>
         </div>
-        {/* 搜索按钮 */}
+
+        {searchError && (
+          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <div className="flex items-center">
+              <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 mr-2" />
+              <span className="text-sm text-red-600 dark:text-red-400">
+                {searchError}
+              </span>
+            </div>
+          </div>
+        )}
+
         <button
           onClick={searchPool}
+          disabled={
+            !selectedToken0Address || !selectedToken1Address || isCheckingPool
+          }
           className={cn(
             'w-full py-4 rounded-lg font-medium text-lg transition-colors',
-            isCheckingPool
+            !selectedToken0Address || !selectedToken1Address || isCheckingPool
               ? 'bg-muted text-muted-foreground cursor-not-allowed'
               : 'bg-primary hover:bg-primary/90 text-primary-foreground'
           )}
         >
-          {isCheckingPool ? '搜索中' : '搜索资金池'}
+          {isCheckingPool ? '搜索中...' : '搜索资金池'}
         </button>
       </div>
     </>
   )
 
-  const renderNotFound = () => (
-    <div className="text-center py-10">
-      <p className="text-lg text-card-foreground mb-4">未找到匹配的流动性池</p>
-      <button
-        onClick={createNewPool}
-        className="bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/80 transition-colors"
-      >
-        创建新池
-      </button>
-    </div>
+  // 搜索结果界面 - 找到池子
+  const renderFoundStep = () => (
+    <>
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-card-foreground">
+            找到可复用的池子
+          </h3>
+          <button
+            onClick={backToSelect}
+            className="text-sm text-primary hover:text-primary/80"
+          >
+            重新选择
+          </button>
+        </div>
+
+        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg mb-4">
+          <div className="flex items-center mb-2">
+            <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 mr-2" />
+            <span className="font-medium text-green-800 dark:text-green-200">
+              池子已存在
+            </span>
+          </div>
+          <div className="text-sm text-green-700 dark:text-green-300 space-y-1">
+            <div>
+              池子地址: {currentPool ? shortenAddress(currentPool) : 'N/A'}
+            </div>
+            <div>费率: {selectedFee / 10000}%</div>
+            {poolIndex !== null && <div>池子索引: {poolIndex}</div>}
+          </div>
+        </div>
+
+        <div className="flex space-x-3">
+          <button
+            onClick={useFoundPool}
+            className="flex-1 py-3 rounded-lg font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
+          >
+            使用此池子
+          </button>
+          <button
+            onClick={createNewPool}
+            className="flex-1 py-3 rounded-lg font-medium bg-muted hover:bg-accent text-foreground transition-colors"
+          >
+            创建新池子
+          </button>
+        </div>
+      </div>
+    </>
   )
 
-  const renderAddLiquidity = () => (
+  // 搜索结果界面 - 未找到池子
+  const renderNotFoundStep = () => (
     <>
-      {/* 池子状态 */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-card-foreground">
+            未找到池子
+          </h3>
+          <button
+            onClick={backToSelect}
+            className="text-sm text-primary hover:text-primary/80"
+          >
+            重新选择
+          </button>
+        </div>
+
+        <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg mb-4">
+          <div className="flex items-center mb-2">
+            <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400 mr-2" />
+            <span className="font-medium text-orange-800 dark:text-orange-200">
+              未找到匹配的池子
+            </span>
+          </div>
+          <div className="text-sm text-orange-700 dark:text-orange-300">
+            将创建新的资金池
+          </div>
+        </div>
+
+        <button
+          onClick={createNewPool}
+          className="w-full py-4 rounded-lg font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
+        >
+          创建新池子
+        </button>
+      </div>
+    </>
+  )
+
+  // 添加流动性界面
+  const renderAddLiquidityStep = () => (
+    <>
+      {/* Pool Status */}
       <div className="mb-4 p-3 bg-muted rounded-lg">
-        <div className="flex justify-between item-center">
+        <div className="flex justify-between items-center">
           <span className="text-sm text-muted-foreground">池子状态</span>
           <span
             className={cn(
               'text-sm font-medium',
-              poolExists
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-red-600 dark:text-orange-400'
+              isCheckingPool
+                ? 'text-primary'
+                : poolExists
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-orange-600 dark:text-orange-400'
             )}
           >
-            {poolExists ? '已存在' : '未创建'}
+            {isCheckingPool ? '检查中' : poolExists ? '已存在' : '未创建'}
           </span>
         </div>
         {currentPool && (
-          <div className="mt-1 text-sxs text-muted-foreground">
-            池子地址:{' '}
-            <span className="text-foreground">
-              {shortenAddress(currentPool)}
-            </span>
+          <div className="mt-1 text-xs text-muted-foreground">
+            池子地址: {shortenAddress(currentPool)}
           </div>
         )}
       </div>
-      {/* 费率 */}
+
+      {/* Fee Selection (只读) */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm text-muted-foreground">费率</span>
@@ -845,22 +1409,24 @@ export default function LiquidityManager() {
           {FEE_TIERS.map((feeValue) => (
             <button
               key={feeValue}
-              className={`flex-1 px-3 py-2 rounded transition-colors ${
+              disabled
+              className={cn(
+                'px-3 py-2 rounded text-sm flex-1',
                 selectedFee === feeValue
-                  ? 'bg-primary text-white'
-                  : 'bg-secondary hover:bg-secondary/80'
-              }`}
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted opacity-50'
+              )}
             >
               {feeValue / 10000}%
             </button>
           ))}
         </div>
       </div>
-      {/* 代币交换 */}
-      {/* Token0 */}
+
+      {/* Initial Price (only show when pool doesn't exist) */}
       {!poolExists && token0 && token1 && (
         <div className="mb-4 p-4 bg-muted rounded-lg">
-          <div className="flex items-center space-x-3 mb-2">
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center space-x-2">
               <span className="text-sm font-medium text-foreground">
                 初始价格
@@ -868,9 +1434,8 @@ export default function LiquidityManager() {
               <Info className="w-4 h-4 text-muted-foreground" />
             </div>
           </div>
-
           <div className="text-xs text-muted-foreground mb-2">
-            设置 {token0.symbol} 与 {token1.symbol} 之间的初始价格比率
+            设置 {token0.symbol} 与 {token1.symbol} 的初始价格比率
           </div>
           <div className="flex items-center space-x-2">
             <span className="text-sm text-muted-foreground">
@@ -880,36 +1445,62 @@ export default function LiquidityManager() {
               type="text"
               value={initialPrice}
               onChange={(e) => handleInitialPriceChange(e.target.value)}
+              placeholder="1"
               className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
             />
             <span className="text-sm text-muted-foreground">
               {token1.symbol}
             </span>
           </div>
-          {/* TODO: priceError */}
+          {priceError && (
+            <div className="mt-2 text-xs text-red-600 dark:text-red-400">
+              {priceError}
+            </div>
+          )}
         </div>
       )}
 
-      {/* token0 是否是原生代币 */}
       {(token0 && isNativeTokenAddress(token0.address)) ||
       (token1 && isNativeTokenAddress(token1.address)) ? (
-        <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg text-sm text-amber-800 dark:text-amber-300">
+        <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-sm text-amber-700 dark:text-amber-300">
           如果你选择了原生 `ETH`，本页会先引导你把所需数量包装成
-          `WETH`，然后再执行授权和添加流动性
+          `WETH`，然后再执行授权和添加流动性。
         </div>
       ) : null}
 
-      {/* TODO: 交易失败提示、是否有余额 */}
+      {transactionError && (
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <div className="flex items-center">
+            <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 mr-2" />
+            <span className="text-sm text-red-600 dark:text-red-400">
+              {transactionError}
+            </span>
+          </div>
+        </div>
+      )}
 
-      {/* Token0 */}
+      {(hasInsufficientBalance0 || hasInsufficientBalance1) && (
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <div className="flex items-center">
+            <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 mr-2" />
+            <span className="text-sm text-red-600 dark:text-red-400">
+              {hasInsufficientBalance0
+                ? `${isNativeTokenAddress(token0?.address) ? 'ETH' : getRequiredBalanceLabel(token0)} 余额不足`
+                : `${isNativeTokenAddress(token1?.address) ? 'ETH' : getRequiredBalanceLabel(token1)} 余额不足`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Token0 Input */}
       {token0 && token1 && (
         <>
           <div className="mb-4">
-            <div className="flex items-center justify-between space-x-2">
-              <span className="text-sm text-muted-foreground">代币 0</span>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-muted-foreground">代币 1</span>
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-muted-foreground">
-                  余额:
+                  余额:{' '}
                   {token0 && isNativeTokenAddress(token0.address)
                     ? nativeBalance
                       ? formatTokenAmount(nativeBalance.formatted)
@@ -926,19 +1517,22 @@ export default function LiquidityManager() {
                       ? nativeBalance
                       : token0Balance)!.formatted
                   ) > 0 && (
-                    <button className="text-sm text-primary hover:text-primary/80">
+                    <button
+                      onClick={handleMaxAmount0}
+                      className="text-xs text-primary hover:text-primary/80 font-medium"
+                    >
                       最大
                     </button>
                   )}
               </div>
             </div>
-            <div className="flex items-center justify-between bg-muted p-4 rounded-lg">
+            <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
               <input
                 type="text"
                 value={amount0}
                 onChange={(e) => handleAmount0Change(e.target.value)}
                 placeholder="0"
-                className="text-2xl font-medium flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
+                className="text-2xl font-medium bg-transparent outline-none flex-1 text-foreground placeholder:text-muted-foreground"
               />
               <div className="px-3 py-2 bg-secondary rounded-lg">
                 <span className="font-medium text-secondary-foreground">
@@ -948,22 +1542,23 @@ export default function LiquidityManager() {
             </div>
           </div>
 
-          {/* swap arrow */}
-          <div className="flex items-center justify-center my-4">
+          {/* Swap Arrow */}
+          <div className="flex justify-center mb-4">
             <button
               onClick={handleSwapTokens}
-              className="p-2 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors"
+              className="p-2 bg-muted hover:bg-accent border border-border rounded-lg transition-colors"
             >
-              <ArrowUpDown className="w-6 h-6 text-muted-foreground" />
+              <ArrowUpDown className="w-5 h-5 text-muted-foreground" />
             </button>
           </div>
-          {/* Token1 */}
-          <div className="mb-4">
-            <div className="flex items-center justify-between space-x-2">
-              <span className="text-sm text-muted-foreground">代币 1</span>
+
+          {/* Token1 Input */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-muted-foreground">代币 2</span>
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-muted-foreground">
-                  余额:
+                  余额:{' '}
                   {token1 && isNativeTokenAddress(token1.address)
                     ? nativeBalance
                       ? formatTokenAmount(nativeBalance.formatted)
@@ -980,32 +1575,43 @@ export default function LiquidityManager() {
                       ? nativeBalance
                       : token1Balance)!.formatted
                   ) > 0 && (
-                    <button className="text-sm text-primary hover:text-primary/80">
+                    <button
+                      onClick={handleMaxAmount1}
+                      className="text-xs text-primary hover:text-primary/80 font-medium"
+                    >
                       最大
                     </button>
                   )}
               </div>
             </div>
-            <div className="flex items-center justify-between bg-muted p-4 rounded-lg">
-              <input
-                type="text"
-                value={amount1}
-                onChange={(e) => handleAmount1Change(e.target.value)}
-                placeholder="0"
-                className="text-2xl font-medium flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
-              />
+            <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
+              <div className="flex items-center flex-1">
+                <div className="text-2xl font-medium text-foreground flex-1">
+                  {isCalculating ? (
+                    <div className="flex items-center">
+                      <Clock className="w-4 h-4 animate-spin mr-2 text-muted-foreground" />
+                      <span className="text-muted-foreground">计算中...</span>
+                    </div>
+                  ) : (
+                    amount1 || '0'
+                  )}
+                </div>
+              </div>
               <div className="px-3 py-2 bg-secondary rounded-lg">
                 <span className="font-medium text-secondary-foreground">
                   {token1.symbol}
                 </span>
               </div>
             </div>
-            {/* TODO 计算有误页面提示 */}
+            {priceError && (
+              <div className="mt-2 text-xs text-red-600 dark:text-red-400">
+                ⚠️ {priceError}
+              </div>
+            )}
           </div>
 
           {/* Action Buttons */}
           {!isConnected ? (
-            // 未连接钱包
             <button
               disabled
               className="w-full py-4 rounded-lg font-medium text-lg bg-muted text-muted-foreground cursor-not-allowed"
@@ -1013,46 +1619,140 @@ export default function LiquidityManager() {
               请先连接钱包
             </button>
           ) : needsWrap0 ? (
-            // 是否需要转换链上值
             <button
               onClick={() => wrapToken(token0, amount0, token0Balance?.value)}
               disabled={
-                isPending || isConfirming || hasInsuffientBalance0 || !amount0
+                isPending || isConfirming || hasInsufficientBalance0 || !amount0
               }
               className={cn(
-                'w-full py-4 rounded-lg font-medium text-lg transtion-colors',
-                isPending || isConfirming || hasInsuffientBalance0 || !amount0
-                  ? 'bg-muted text-muted-foreground cursor-not-allow'
+                'w-full py-4 rounded-lg font-medium text-lg transition-colors',
+                isPending || isConfirming || hasInsufficientBalance0 || !amount0
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
                   : 'bg-blue-500 hover:bg-blue-600 text-white'
               )}
             >
-              {isPending || isConfirming ? '包装中...' : '先将 ETH 包装为 WETH'}
+              {isPending || isConfirming ? '包装中...' : `先将 ETH 包装为 WETH`}
             </button>
           ) : needsWrap1 ? (
-            // 是否需要转换链上值
             <button
               onClick={() => wrapToken(token1, amount1, token1Balance?.value)}
               disabled={
-                isPending || isConfirming || hasInsuffientBalance1 || !amount1
+                isPending || isConfirming || hasInsufficientBalance1 || !amount1
               }
               className={cn(
-                'w-full py-4 rounded-lg font-medium text-lg transtion-colors',
-                isPending || isConfirming || hasInsuffientBalance1 || !amount1
-                  ? 'bg-muted text-muted-foreground cursor-not-allow'
+                'w-full py-4 rounded-lg font-medium text-lg transition-colors',
+                isPending || isConfirming || hasInsufficientBalance1 || !amount1
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
                   : 'bg-blue-500 hover:bg-blue-600 text-white'
               )}
             >
-              {isPending || isConfirming ? '包装中...' : '先将 ETH 包装为 WETH'}
+              {isPending || isConfirming ? '包装中...' : `先将 ETH 包装为 WETH`}
             </button>
           ) : needsApproval0 ? (
-            // 需要授权 token0
-            <button></button>
+            <button
+              onClick={() =>
+                approveToken(token0.address, amount0, token0.decimals)
+              }
+              disabled={
+                isPending ||
+                isConfirming ||
+                isCheckingAllowance ||
+                hasInsufficientBalance0 ||
+                !amount0
+              }
+              className={cn(
+                'w-full py-4 rounded-lg font-medium text-lg transition-colors',
+                isPending ||
+                  isConfirming ||
+                  isCheckingAllowance ||
+                  hasInsufficientBalance0 ||
+                  !amount0
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                  : 'bg-yellow-500 hover:bg-yellow-600 text-white'
+              )}
+            >
+              {isPending || isConfirming
+                ? '授权中...'
+                : isCheckingAllowance
+                  ? '检查授权中...'
+                  : `授权 ${token0.symbol}`}
+            </button>
           ) : needsApproval1 ? (
-            // 需要授权 token1
-            <button></button>
+            <button
+              onClick={() =>
+                approveToken(token1.address, amount1, token1.decimals)
+              }
+              disabled={
+                isPending ||
+                isConfirming ||
+                isCheckingAllowance ||
+                hasInsufficientBalance1 ||
+                !amount1
+              }
+              className={cn(
+                'w-full py-4 rounded-lg font-medium text-lg transition-colors',
+                isPending ||
+                  isConfirming ||
+                  isCheckingAllowance ||
+                  hasInsufficientBalance1 ||
+                  !amount1
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                  : 'bg-yellow-500 hover:bg-yellow-600 text-white'
+              )}
+            >
+              {isPending || isConfirming
+                ? '授权中...'
+                : isCheckingAllowance
+                  ? '检查授权中...'
+                  : `授权 ${token1.symbol}`}
+            </button>
           ) : (
-            // 一切准备就绪，可以添加流动性了
-            <button></button>
+            <button
+              onClick={poolExists ? addLiquidity : createPoolAndAddLiquidity}
+              disabled={
+                !amount0 ||
+                !amount1 ||
+                hasInsufficientBalance0 ||
+                hasInsufficientBalance1 ||
+                isPending ||
+                isConfirming ||
+                isCalculating ||
+                isCheckingPool ||
+                isCheckingAllowance ||
+                !!priceError ||
+                !token0 ||
+                !token1
+              }
+              className={cn(
+                'w-full py-4 rounded-lg font-medium text-lg transition-colors',
+                !amount0 ||
+                  !amount1 ||
+                  hasInsufficientBalance0 ||
+                  hasInsufficientBalance1 ||
+                  isPending ||
+                  isConfirming ||
+                  isCalculating ||
+                  isCheckingPool ||
+                  isCheckingAllowance ||
+                  !!priceError ||
+                  !token0 ||
+                  !token1
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                  : 'bg-primary hover:bg-primary/90 text-primary-foreground'
+              )}
+            >
+              {isPending || isConfirming
+                ? '处理中...'
+                : isCalculating
+                  ? '计算中...'
+                  : isCheckingPool
+                    ? '检查池子中...'
+                    : isCheckingAllowance
+                      ? '检查授权中...'
+                      : poolExists
+                        ? '添加流动性'
+                        : '创建池子并添加流动性'}
+            </button>
           )}
         </>
       )}
@@ -1061,12 +1761,12 @@ export default function LiquidityManager() {
 
   return (
     <div className="w-full max-w-md mx-auto">
-      <div className="bg-card border border-border rounded-2xl p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-lg p-4">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-semibold text-card-foreground">
+          <h2 className="text-xl font-semibold text-card-foreground">
             添加流动性
-          </h1>
+          </h2>
           {step !== 'select' && (
             <button
               onClick={backToSelect}
@@ -1076,18 +1776,30 @@ export default function LiquidityManager() {
             </button>
           )}
         </div>
+
         {/* Transaction Status */}
+        {step === 'addLiquidity' && <TransactionStatus />}
+
         {/* Wallet Status */}
+        {isConnected && address && step === 'addLiquidity' && (
+          <div className="mb-4 p-3 bg-primary/10 rounded-lg">
+            <div className="text-sm text-primary">
+              已连接: {shortenAddress(address)}
+            </div>
+          </div>
+        )}
+
         {/* 根据步骤渲染不同界面 */}
-        {step === 'select' && renderSelect()}
+        {step === 'select' && renderSelectStep()}
         {step === 'searching' && (
           <div className="text-center py-8">
             <Clock className="w-8 h-8 animate-spin text-primary mx-auto mb-4" />
-            <p className="text-center py-10">正在搜索流动性池...</p>
+            <p className="text-muted-foreground">正在搜索资金池...</p>
           </div>
         )}
-        {step === 'notFound' && renderNotFound()}
-        {step === 'addLiquidity' && renderAddLiquidity()}
+        {step === 'found' && renderFoundStep()}
+        {step === 'notFound' && renderNotFoundStep()}
+        {step === 'addLiquidity' && renderAddLiquidityStep()}
       </div>
     </div>
   )

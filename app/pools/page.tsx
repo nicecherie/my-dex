@@ -1,7 +1,6 @@
 'use client'
 
 import { NetworkChecker } from '@/components/NetworkChecker'
-import { CreatePoolModal } from '@/components/pools/CreatePoolModal'
 import { usePools } from '@/hooks/usePools'
 import { formatNumber } from '@/lib/utils'
 import {
@@ -14,14 +13,51 @@ import {
   TrendingUp
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAccount } from 'wagmi'
 
-export default function PoolsPage() {
-  const [showCreateModal, setShowCreateModal] = useState(false)
+// 根据 api 响应数据，定义响应字段
+interface PoolData {
+  pool: string
+  token0: string
+  token1: string
+  token0Symbol: string
+  token1Symbol: string
+  token0Decimals: string
+  token1Decimals: string
+  fee: number
+  feePercent: string
+  liquidity: string
+  sqrtPriceX96: string
+  tick: number
+  tvl: string
+  tvlUSD: number
+  volume24h: string
+  feesUSD: number
+  pair: string
+  index: number
+  token0Balance: string
+  token1Balance: string
+}
 
+export default function PoolsPage() {
   const { isConnected } = useAccount()
-  const { pools, loading, error, totalStats, refetch } = usePools()
+  const [pools, setPools] = useState<PoolData[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [totalStatus, setTotalStatus] = useState({
+    totalPools: 0,
+    totalTVL: 0,
+    totalVolume24h: 0,
+    totalFeesGenerated: 0
+  })
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0
+  })
+  // const { pools, loading, error, totalStats, refetch } = usePools()
   const router = useRouter()
   // 格式化最大数字
   const formatLargeNumber = (val: number) => {
@@ -34,96 +70,52 @@ export default function PoolsPage() {
     }
   }
 
+  const fetchPools = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/pools')
+      if (!response.ok) {
+        throw new Error('Failed to fetch pools')
+      }
+      const data = await response.json()
+      setPools(data.data)
+      setPagination(data.pagination)
+      setTotalStatus({
+        totalPools: data.pagination.total || 0,
+        totalTVL: data.data.reduce(
+          (sum: number, pool: PoolData) => sum + pool.tvlUSD,
+          0
+        ),
+        totalVolume24h: data.data.reduce(
+          (sum: number, pool: PoolData) => sum + parseFloat(pool.volume24h),
+          0
+        ),
+        totalFeesGenerated: data.data.reduce(
+          (sum: number, pool: PoolData) => sum + pool.feesUSD,
+          0
+        )
+      })
+    } catch (err) {
+      console.error('Error loading pools', err)
+      setError(err instanceof Error ? err.message : '加载池子数据失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => {
+    fetchPools()
+  }, [])
   const handleCreatePool = () => {
     router.push('/liquidity')
   }
   return (
     <div>
       <NetworkChecker>
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">流动性池</h1>
-          <p className="text-gray-600">
-            查看所有流动性池的实时数据吗，包括TVL、交易量和手续费等信息。
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-lg border">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {loading ? (
-                    <div className="flex items-center">
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />-
-                    </div>
-                  ) : (
-                    totalStats.totalPools
-                  )}
-                </div>
-                <div className="text-sm">总池数</div>
-              </div>
-              <Droplets className="w-8 h-8 text-blue-500" />
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg border">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {loading ? (
-                    <div className="flex items-center">
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />-
-                    </div>
-                  ) : (
-                    formatLargeNumber(totalStats.totalTVL)
-                  )}
-                </div>
-                <div className="text-sm">总锁仓价值</div>
-              </div>
-              <DollarSign className="w-8 h-8 text-green-500" />
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg border">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {loading ? (
-                    <div className="flex items-center">
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />-
-                    </div>
-                  ) : (
-                    formatLargeNumber(totalStats.totalVolume24h)
-                  )}
-                </div>
-                <div className="text-sm">24小时交易量</div>
-              </div>
-              <Activity className="w-8 h-8 text-purple-500" />
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg border">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {loading ? (
-                    <div className="flex items-center">
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />-
-                    </div>
-                  ) : (
-                    formatLargeNumber(totalStats.totalFeesGenerated)
-                  )}
-                </div>
-                <div className="text-sm">累计费用收入</div>
-              </div>
-              <Zap className="w-8 h-8 text-yellow-500" />
-            </div>
-          </div>
-        </div>
-
         {/* 池子列表 */}
-        <div className="bg-white rounded-lg border overflow-hidden">
-          <div className="p-6 border-b">
+        <div className="rounded-lg overflow-hidden">
+          {/* 表格内容 */}
+          <div className="p-6">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-semibold">所有流动性池</h2>
               <button
@@ -146,7 +138,7 @@ export default function PoolsPage() {
           ) : error ? (
             <div className="p-12 text-center">
               加载失败
-              <button onClick={() => refetch()}>重新加载</button>
+              <button onClick={() => fetchPools()}>重新加载</button>
             </div>
           ) : loading ? (
             <div className="p-12">
@@ -261,6 +253,10 @@ export default function PoolsPage() {
                   ))}
                 </tbody>
               </table>
+              {/* 页码 */}
+              <div className="px-6 py-4 text-sm text-gray-500 flex ">
+                {pagination.page} / {pagination.totalPages}
+              </div>
             </div>
           )}
         </div>

@@ -176,7 +176,11 @@ export default function PoolsPage() {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {pools.map((pool) => (
-                    <tr key={pool.pool} className="hover:bg-gray-50">
+                    <tr
+                      key={pool.pool}
+                      onClick={() => router.push(`/pools/${pool.pool}`)}
+                      className="hover:bg-gray-50"
+                    >
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <div className="flex -space-x-2 mr-3">

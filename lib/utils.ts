@@ -59,3 +59,15 @@ export function parseInputAmount(input: string): string {
 
   return cleaned
 }
+
+const Q96 = BigInt(2) ** BigInt(96)
+export function sqrtPriceX96ToPrice(
+  sqrtPriceX96: string,
+  token0Decimals: number,
+  token1Decimals: number
+): number {
+  const sqrt = Number(BigInt(sqrtPriceX96)) / Number(Q96)
+  const ratio = sqrt * sqrt
+  const decimalAdjust = 10 ** (token0Decimals - token1Decimals)
+  return ratio * decimalAdjust
+}

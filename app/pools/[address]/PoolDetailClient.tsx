@@ -1,4 +1,5 @@
 'use client'
+import PoolTradingChart from '@/components/charts/PoolTradingChart'
 import { formatNumber, shortenAddress } from '@/lib/utils'
 import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
@@ -27,9 +28,25 @@ interface PoolData {
   tickUpper: number
   createdAt: string
 }
+interface SwapData {
+  transactionHash: string
+  log_index: number
+  pool_address: string
+  sender: string
+  recipient: string
+  sqrt_price_x96: string
+  amount0: string
+  amount1: string
+  liquidity: string
+  tick: number
+  block_number: number
+  block_timestamp: string
+}
 export default function PoolDetailClient({ address }: PoolDetailProps) {
   const [pool, setPool] = useState<PoolData | null>(null)
+  const [swaps, setSwaps] = useState<SwapData[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -42,8 +59,16 @@ export default function PoolDetailClient({ address }: PoolDetailProps) {
         }
         const poolJson = await poolRes.json()
         setPool(poolJson.data)
+
+        const swapsRes = await fetch(`/api/pools/${address}/swaps`)
+        if (!swapsRes.ok) {
+          throw new Error('Failed to fetch swaps data')
+        }
+        const swapsJson = await swapsRes.json()
+        setSwaps(swapsJson.data)
       } catch (err) {
         console.error('Error fetching pool data:', err)
+        setError((err as Error).message)
       } finally {
         setLoading(false)
       }
@@ -80,6 +105,24 @@ export default function PoolDetailClient({ address }: PoolDetailProps) {
 
   const { currentPrice = 0, minPrice = 0, maxPrice = 0 } = calculatePrices()
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">Loading pool data...</div>
+      </div>
+    )
+  }
+
+  if (error || !pool) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">Pool not found.</div>
+        <Link href="/pools" className="text-blue-500 hover:underline">
+          Back to Pools
+        </Link>
+      </div>
+    )
+  }
   return (
     <div>
       {/* Header */}
@@ -92,7 +135,7 @@ export default function PoolDetailClient({ address }: PoolDetailProps) {
           返回
         </Link>
 
-        <div className="flex justify-between">
+        <div className="flex flex-col md:flex-row items-start md:items-center gap-4 justify-between">
           <div className="flex items-center gap-4">
             {/* Token Symbols */}
             <div className="flex -space-x-3">
@@ -167,6 +210,13 @@ export default function PoolDetailClient({ address }: PoolDetailProps) {
             </div>
           </div>
           {/* Chart */}
+          <PoolTradingChart
+            swap={swaps}
+            token1Symbol={pool.token1Symbol}
+            token0Symbol={pool.token0Symbol}
+            token0Decimals={pool.token0Decimals}
+            token1Decimals={pool.token1Decimals}
+          />
         </div>
         {/* right column: details */}
         <div className="space-y-6">
@@ -214,7 +264,7 @@ export default function PoolDetailClient({ address }: PoolDetailProps) {
               <div className="flex justify-between ">
                 <span className="text-gray-500">Created At</span>
                 <span className="font-mono text-sm">
-                  {new Date(pool!.createdAt).toLocaleDateString()}
+                  {new Date(pool.createdAt).toLocaleDateString()}
                 </span>
               </div>
             </div>

@@ -32,6 +32,7 @@ export default function RootLayout({
           <Web3Provider>
             <div className="flex flex-col min-h-screen bg-gradient-to-br from-blue-100 to-gray-100">
               <Header />
+              <div className="h-16"></div>
               <main className="container mx-auto px-4 py-8">{children}</main>
             </div>
           </Web3Provider>

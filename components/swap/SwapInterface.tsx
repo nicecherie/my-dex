@@ -11,7 +11,8 @@ import {
   shortenAddress
 } from '@/lib/utils'
 import { CheckCircle, ChevronDown, Clock, Settings } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { parseUnits } from 'viem'
 import { useAccount, useBalance, useCall } from 'wagmi'
 
 type Token = {
@@ -64,9 +65,9 @@ export default function SwapInterface() {
   )
   const [fromAmount, setFromAmount] = useState('')
   const [toAmount, setToAmount] = useState('')
+  const [quoteError, setQuoteError] = useState<string | null>(null)
   const [isQuoting, setIsQuoting] = useState(false)
   const [isSimulated, setIsSimulated] = useState(false)
-  const [needsApproval, setNeedsApproval] = useState(false)
 
   const {
     getQuote,
@@ -333,7 +334,111 @@ export default function SwapInterface() {
     ? nativeBalance
     : toTokenBalance
 
-  //TODO: 处理授权
+  // 检查授权
+  const { data: allowance, refetch: refetchAllowance } = useTokenAllowance(
+    isEthLikeAddress(fromToken.address) ? '' : fromToken.address
+  )
+
+  // 派生状态：避免 useEffect + setState；allowance 等依赖在 wagmi 下可能每帧变引用，会触发「Maximum update depth」。
+  const needsApproval = useMemo(() => {
+    if (isEthLikeAddress(fromToken.address)) return false
+    if (fromToken.supportsPermit) return false
+    if (!fromAmount || parseFloat(fromAmount) <= 0) return false
+    if (allowance == null) return true
+    try {
+      const amountWei = parseUnits(fromAmount, fromToken.decimals)
+      return allowance < amountWei
+    } catch {
+      return true
+    }
+  }, [
+    allowance,
+    fromAmount,
+    fromToken.address,
+    fromToken.decimals,
+    fromToken.supportsPermit
+  ])
+
+  // 自动获取价格预估
+  const updateQuote = useCallback(async () => {
+    if (!fromAmount || parseFloat(fromAmount) === 0) {
+      setToAmount('')
+      setQuoteError(null)
+      return
+    }
+
+    setIsQuoting(true)
+    setQuoteError(null)
+    try {
+      const quote = await getQuote({
+        tokenIn: fromToken.address,
+        tokenOut: toToken.address,
+        amountIn: fromAmount,
+        slippage, // 默认 0.5
+        indexPath: selectedIndexPath,
+        tokenInDecimals: fromToken.decimals,
+        tokenOutDecimals: toToken.decimals
+      })
+
+      if (quote) {
+        setToAmount(quote.amountOut)
+        setIsSimulated(quote.simulated || false)
+        setQuoteError(null)
+      } else {
+        setToAmount('')
+        setQuoteError(null)
+      }
+    } catch (err) {
+      console.log('Quote failed: ', err)
+      setToAmount('')
+
+      const errorMessage = err instanceof Error ? err.message : '获取报价失败'
+      setQuoteError(errorMessage)
+    } finally {
+      setIsQuoting(false)
+    }
+  }, [
+    fromAmount,
+    fromToken.address,
+    toToken.address,
+    fromToken.decimals,
+    toToken.decimals,
+    getQuote,
+    slippage
+  ])
+
+  const updateQuoteRef = useRef(updateQuote)
+  updateQuoteRef.current = updateQuote
+
+  // 有效卖出数量时，才拉报价/展示误差与【到】侧数字
+  // 避免空输入时 effect 随池子 index 等依赖反复 setState
+  const shouldShowQuote = useMemo(() => {
+    if (!fromAmount) return false
+    const n = parseFloat(fromAmount)
+    return Number.isFinite(n) && n > 0
+  }, [fromAmount])
+
+  const displayToAmount = shouldShowQuote ? toAmount : ''
+  const displayQuoteError = shouldShowQuote ? quoteError : null
+
+  useEffect(() => {
+    if (!shouldShowQuote) return
+
+    const timer = setTimeout(() => {
+      void updateQuoteRef.current()
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [
+    shouldShowQuote,
+    fromToken.address,
+    toToken.address,
+    fromToken.decimals,
+    toToken.decimals,
+    slippage,
+    primaryPoolIndex
+  ])
+
   // 处理输入金额
   const handleFromAmountChange = (value: string) => {
     const parsed = parseInputAmount(value)
@@ -416,7 +521,6 @@ export default function SwapInterface() {
       </div>
     )
   }
-  console.log(JSON.stringify(tokenList), 'tokenList')
   const TranscationStatus = () => {
     if (!hash) return null
 
@@ -546,7 +650,7 @@ export default function SwapInterface() {
           {/* 输入框和代币选择 */}
           <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
             <div className="text-2xl font-medium text-foreground">
-              {isQuoting ? (
+              {shouldShowQuote && isQuoting ? (
                 <div className="flex items-center">
                   <Clock className="w-4 h-4 animate-spin mr-2 text-muted-foreground" />
                   <span className="text-muted-foreground">获取报价中...</span>

@@ -443,10 +443,101 @@ export default function SwapInterface() {
   const handleFromAmountChange = (value: string) => {
     const parsed = parseInputAmount(value)
     setFromAmount(parsed)
+    if (
+      !parsed ||
+      !Number.isFinite(parseFloat(parsed)) ||
+      parseFloat(parsed) <= 0
+    ) {
+      setToAmount('')
+      setQuoteError(null)
+    }
   }
-  const handleApprove = () => {}
+  const handleApprove = async () => {
+    if (!fromAmount) return
+
+    try {
+      await approveToken(fromToken.address, fromAmount, fromToken.decimals)
+    } catch (error) {
+      console.error('Approval failed:', error)
+    }
+  }
   // 处理交易
-  const handleSwap = () => {}
+  const handleSwap = async () => {
+    if (!fromAmount || !toAmount || !isConnected) return
+    if (needsApproval) {
+      setQuoteError('授权不足，请先点击Approve')
+      return
+    }
+    if (selectedIndexPath.length === 0) {
+      setQuoteError('未找到可引用的池子')
+      return
+    }
+
+    try {
+      await executeSwap({
+        tokenIn: fromToken.address,
+        tokenOut: toToken.address,
+        amountIn: fromAmount,
+        slippage,
+        indexPath: selectedIndexPath,
+        tokenInDecimals: fromToken.decimals,
+        tokenOutDecimals: toToken.decimals,
+        tokenInName: fromToken.name,
+        tokenInSupportsPermit: fromToken.supportsPermit
+      })
+    } catch (error) {
+      if (displayFromBalance) {
+        setFromAmount(displayFromBalance.formatted)
+      }
+    }
+  }
+
+  // 刷新授权状态
+  useEffect(() => {
+    if (isConfirmed) {
+      refetchAllowance()
+    }
+  }, [isConfirmed, refetchAllowance])
+
+  // 当pool关系或代币列表变化时，统一修正交易对，避免 from/to 两个effect相互触发
+  useEffect(() => {
+    const fromAddr = fromToken.address
+    const toAddr = toToken.address
+
+    //  当前 toToken 是否还在 toTokenOptions 中
+    const isCurrentToValid = toTokenOptions.some(
+      (token) => token.address.toLowerCase() === toAddr
+    )
+    // toTokenOptions 是否存在不同于 fromToken 的选项
+    const canUseDifferentTo = toTokenOptions.some(
+      (token) => token.address.toLowerCase() !== fromAddr
+    )
+    // 如果两个代币一样，或者不满足
+    if (fromAddr === toAddr || !isCurrentToValid) {
+      // 找到不同于 fromToken 的选项
+      const nextTo = toTokenOptions.find(
+        (token) => token.address.toLowerCase() !== fromAddr
+      )
+      if (nextTo && nextTo.address.toLowerCase() !== toAddr) {
+        setToToken(nextTo)
+      }
+      return
+    }
+
+    if (!canUseDifferentTo) return
+    const isCurrentFromValid = fromTokenOptions.some(
+      (token) => token.address.toLowerCase() === fromAddr
+    )
+    if (!isCurrentFromValid) {
+      const nextFrom = fromTokenOptions.find(
+        (token) => token.address.toLowerCase() !== toAddr
+      )
+      if (nextFrom && nextFrom.address.toLowerCase() !== fromAddr) {
+        setToToken(nextFrom)
+      }
+      return
+    }
+  }, [fromToken.address, toToken.address, toTokenOptions, fromTokenOptions])
 
   // 处理代币选择
   const TokenSelector = ({

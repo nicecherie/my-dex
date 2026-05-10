@@ -1,9 +1,10 @@
 'use client'
 import PoolTradingChart from '@/components/charts/PoolTradingChart'
 import { formatNumber, shortenAddress } from '@/lib/utils'
-import { ArrowLeft } from 'lucide-react'
+import { Activity, ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { formatUnits } from 'viem'
 
 interface PoolDetailProps {
   address: string
@@ -269,6 +270,97 @@ export default function PoolDetailClient({ address }: PoolDetailProps) {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* 交易详情 */}
+      <div className="mt-8">
+        <h3 className="text-lg font-bold text-gray-900 mb-4 flex gap-2">
+          <Activity className="w-5 h-5 text-gray-500" />
+          Recent Transactions
+        </h3>
+
+        <div className="bg-white border border-gray-100  rounded-xl overflow-hidden shadow-sm">
+          {swaps.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">
+              No transaction found for this pool
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Action
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Total Value
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Token Amount
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Token Amount
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Time
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {swaps.map((swap) => {
+                    const amount0Big = BigInt(swap.amount0)
+                    const amount0Abs = amount0Big < 0 ? -amount0Big : amount0Big
+                    const isBuyToken0 = amount0Big < 0
+
+                    const amount1Big = BigInt(swap.amount1)
+                    const amount1Abs = amount1Big < 0 ? -amount1Big : amount1Big
+
+                    const amount0 = formatUnits(amount0Abs, pool.token0Decimals)
+                    const amount1 = formatUnits(amount1Abs, pool.token1Decimals)
+                    return (
+                      <tr
+                        key={`${swap.transactionHash}-${swap.log_index}`}
+                        className="hover:bg-gray-50/50 text-sm text-gray-900"
+                      >
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <a
+                            href={`https://sepolia.etherscan.io/tx/${swap.transactionHash}`}
+                            target="_blank"
+                            className="text-blue-600 hover:underline text-sm font-medium"
+                          >
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                isBuyToken0
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-red-100 text-red-800'
+                              }`}
+                            >
+                              {isBuyToken0
+                                ? `Buy ${pool.token0Symbol}`
+                                : `Sell ${pool.token0Symbol}`}
+                            </span>
+                          </a>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-900 text-sm">
+                          -
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-900 text-sm">
+                          {parseFloat(amount0).toFixed(4)} {pool.token0Symbol}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-900 text-sm">
+                          {parseFloat(amount1).toFixed(4)} {pool.token1Symbol}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-900 text-sm">
+                          {new Date(swap.block_timestamp).toLocaleString()}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

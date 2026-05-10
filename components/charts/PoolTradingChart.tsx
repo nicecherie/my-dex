@@ -86,10 +86,73 @@ export default function PoolTradingChart({
 
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#ffffff' }
+        background: { type: ColorType.Solid, color: '#ffffff' },
+        textColor: '#475569'
+      },
+      grid: {
+        vertLines: {
+          color: '#f1f5f9'
+        },
+        horzLines: { color: '#f1f5f9' }
+      },
+      crosshair: {
+        vertLine: { color: '#94a3b8', labelBackgroundColor: '#2563eb' },
+        horzLine: { color: '#94a3b8', labelBackgroundColor: '#2563eb' }
+      },
+      rightPriceScale: { borderColor: '#e2e8f0' },
+      timeScale: {
+        borderColor: '#e2e8f0',
+        timeVisible: true,
+        secondsVisible: false
+      },
+      localization: {
+        priceFormatter: (value: number) => value.toFixed(6)
       }
     })
-  }, [])
+    chartRef.current = chart
+
+    const areaSeries = chart.addSeries(AreaSeries, {
+      lineColor: '#2563eb',
+      topColor: 'rgba(37, 99, 235, .24)',
+      bottomColor: 'rgba(37,99,235, .02)',
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true
+    })
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: {
+        type: 'volume'
+      },
+      priceScaleId: ''
+    })
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0
+      }
+    })
+
+    areaSeries.setData(chartData.priceData)
+    volumeSeries.setData(chartData.volumeData)
+    chart.timeScale().fitContent()
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry || !chartRef.current) return
+      chartRef.current.applyOptions({
+        width: entry.contentRect.width
+      })
+    })
+
+    resizeObserver.observe(containerRef.current) // 开始监听
+
+    return () => {
+      resizeObserver.disconnect()
+      chart.remove()
+      chartRef.current = null
+    }
+  }, [chartData])
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
       <div className="text-lg font-bold text-gray-900">Price & Volume</div>
